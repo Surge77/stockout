@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Rossmann dataset access
+    url: https://www.kaggle.com/competitions/rossmann-store-sales/rules
+    about: >-
+      A 403 from `stockout fetch` is almost always unaccepted competition rules, not a
+      bad token. Accept them here first; this project cannot fix that for you.

@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch: {}
+
+concurrency:
+  # A second push to the same branch makes the first run's answer irrelevant.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        # Editable, so the tests import the package exactly as a user would. The `gbm`
+        # extra is deliberately NOT installed: the whole suite must stay green without
+        # LightGBM, which is what keeps models/gbm.py an honest stub.
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        # `check` only. `ruff format` is never run here — see ADR 0004.
+        run: ruff check .
+
+      - name: Tests
+        # Integration tests are excluded by pyproject's addopts; they need a Kaggle token
+        # and acceptance of the competition rules, neither of which a fork can have.
+        run: pytest --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=90
+
+      - name: Types
+        run: pyright
+
+  smoke:
+    # Proves the offline path a new clone actually takes. The unit tests could all pass
+    # while the CLI was broken by a bad default, and this is what catches that.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Describe the committed sample
+        run: |
+          python -m stockout describe | tee describe.txt
+          grep -q "trading days" describe.txt
+          grep -q "calendar gaps" describe.txt
+
+      - name: The baseline scores exactly 1.000 against itself
+        # MASE is scaled by seasonal-naive, so seasonal-naive must score 1.000 by
+        # identity. If this ever drifts, every other MASE in the repo is measuring
+        # against something other than the baseline it claims.
+        run: |
+          python -m stockout backtest --model seasonal_naive | tee baseline.txt
+          grep -q "MASE 1.000" baseline.txt
+          grep -q "this \*is\* the seasonal-naive baseline" baseline.txt
+
+      - name: Ignoring the weekday costs something
+        run: |
+          python -m stockout backtest --model naive_last | tee naive.txt
+          grep -q "loses" naive.txt
+
+      - name: A shuffled split is not on offer
+        # The absence is the feature. If someone adds a convenience splitter, this fails.
+        run: |
+          ! grep -rn "shuffle\|random_state\|train_test_split" src/
+
+  sample-drift:
+    # The generator is deterministic, so a regenerated sample should be byte-identical.
+    # A difference means the generator changed — which is allowed, and should be noticed.
+    # Warns rather than fails: a deliberate change must not block a merge.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Regenerate and compare
+        run: |
+          cp data/sample_sales.csv /tmp/committed.csv
+          python scripts/make_sample.py
+          if ! diff -q /tmp/committed.csv data/sample_sales.csv > /dev/null; then
+            echo "::warning::data/sample_sales.csv is stale — run scripts/make_sample.py and commit the result"
+          fi

@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose something the project should do and does not
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would build
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it would cost
+      description: >-
+        Required. Every decision in docs/decisions/ names its downside, and a proposal
+        with no downside is usually one that has not been thought about hard enough.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This does not add a dependency for something the standard library covers
+        - label: This does not introduce a shuffled or random split
+        - label: If it adds a model, there is a way to measure whether it beats seasonal-naive
