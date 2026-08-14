@@ -1,0 +1,40 @@
+# The Rossmann archive is a Kaggle competition dataset. Its rules forbid
+# redistribution, so it is downloaded per machine and never committed — see
+# docs/decisions/0001-data-is-downloaded-not-committed.md. Only the small
+# synthetic sample is tracked, so a fresh clone runs offline.
+data/*
+!data/.gitkeep
+!data/sample_sales.csv
+
+# Secrets. kaggle.json lives in ~/.kaggle, but a KAGGLE_KEY in a local .env must
+# never become committable by accident.
+.env
+.env.*
+!.env.example
+
+# Generated output. Charts are regenerated from the notebook, never committed.
+reports/*
+!reports/.gitkeep
+
+# Local harness config — the branch-protection hook is machine-local, not a
+# repository policy someone cloning this should inherit.
+.claude/
+
+# Crash dumps from the Git Bash / msys shell on Windows. Not ours, never wanted.
+*.stackdump
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.hypothesis/
+build/
+dist/
+*.egg-info/
