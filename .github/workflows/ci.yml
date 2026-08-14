@@ -83,10 +83,10 @@ jobs:
           python -m stockout backtest --model naive_last | tee naive.txt
           grep -q "loses" naive.txt
 
-      - name: A shuffled split is not on offer
-        # The absence is the feature. If someone adds a convenience splitter, this fails.
-        run: |
-          ! grep -rn "shuffle\|random_state\|train_test_split" src/
+      # The absence of a shuffled splitter is checked by tests/test_no_random_splits.py,
+      # which parses the AST rather than grepping. A text search cannot distinguish code
+      # from the docstrings explaining why the code is absent — the first version of this
+      # step failed on exactly that, and on __pycache__ binaries.
 
   sample-drift:
     # The generator is deterministic, so a regenerated sample should be byte-identical.

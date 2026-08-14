@@ -157,7 +157,7 @@ reports/                generated charts — regenerated, never committed
 ```bash
 ruff check .                                  # lint only; never `ruff format` (ADR 0004)
 pyright                                       # type gate
-pytest --cov --cov-fail-under=90              # 110 passing, 10 skipped, 98% covered
+pytest --cov --cov-fail-under=90              # 232 passing, 10 skipped, 98% covered
 ```
 
 Unit tests never touch the network. A `conftest.py` autouse fixture replaces
@@ -168,6 +168,12 @@ laptop that happens to have credentials and failing in CI. Network work goes beh
 The ten skipped tests are the specification for the unbuilt half — the GBM models and the
 inventory simulator. They are written first on purpose, so the intended behaviour is on
 record before the implementation can shape it.
+
+`tests/test_no_random_splits.py` parses every module's AST and asserts that no shuffled
+split, no `random_state`, and no scikit-learn import executes anywhere in the package. It
+parses rather than greps because a text search cannot tell code from the docstrings
+explaining why the code is absent — and would therefore be defeated by deleting the
+explanation.
 
 ## Known limits
 

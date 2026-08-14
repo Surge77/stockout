@@ -34,7 +34,8 @@ First scaffold. The spine runs end to end; the learned models do not exist yet.
 - **CLI** — `stockout fetch | synth | describe | backtest`.
 - **Docs** — five questions committed before any analysis, seven ADRs, architecture, data
   dictionary, glossary, model card.
-- **Tests** — 110 passing, 10 skipped, 98% coverage. Unit tests cannot open a socket.
+- **Tests** — 232 passing, 10 skipped, 98% coverage. Unit tests cannot open a socket, and
+  an AST check asserts that no randomised split executes anywhere in the package.
 
 ### Notes
 
