@@ -1,0 +1,118 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stockout"
+version = "0.1.0"
+description = "Retail demand forecasting scored by the decision it drives — replenishment — with rolling-origin backtesting and leakage guards that fail the test suite, not the code review."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "TEJAS", email = "tejasdeshmane66@gmail.com" }]
+keywords = [
+    "time-series",
+    "forecasting",
+    "demand-forecasting",
+    "backtesting",
+    "inventory",
+    "retail",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+# Pinned exactly. A portfolio repo that cannot be reproduced two years from now is
+# not evidence of anything.
+#
+# kaggle is a runtime dependency rather than an extra because `stockout fetch` is a
+# first-class command, not an optional convenience. It is the only dependency that
+# ever opens a socket, and nothing under tests/ is allowed to reach it.
+dependencies = [
+    "pandas==2.2.3",
+    "numpy==2.4.3",
+    "matplotlib==3.10.8",
+    "kaggle==2.2.4",
+    "python-dotenv==1.2.2",
+]
+
+[project.optional-dependencies]
+# LightGBM lives behind an extra because src/stockout/models/gbm.py is a stub. The
+# whole test suite runs, and the seasonal-naive backtest produces a real number,
+# without it installed. Nothing about the spine depends on a model existing.
+gbm = ["lightgbm==4.7.0"]
+dev = [
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "ruff==0.16.3",
+    "pyright==1.1.411",
+    "pandas-stubs==3.0.5.260730",
+    "hypothesis==6.165.6",
+]
+notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0"]
+
+[project.urls]
+Homepage = "https://github.com/Surge77/stockout"
+Repository = "https://github.com/Surge77/stockout"
+Issues = "https://github.com/Surge77/stockout/issues"
+
+[project.scripts]
+stockout = "stockout.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+stockout = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Integration tests reach Kaggle, which needs credentials and competition-rule
+# acceptance. Excluded by default so a fresh clone is green offline.
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: downloads the real Rossmann archive from Kaggle (needs network + kaggle.json)",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["stockout"]
+omit = ["*/__main__.py", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.pyright]
+# Point at the in-repo virtualenv so the editor and the CLI resolve the same pandas.
+venvPath = "."
+venv = ".venv"
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "C4", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["stockout"]
+
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["E402", "F401"]

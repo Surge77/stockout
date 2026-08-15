@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "stockout: retail demand forecasting scored by the replenishment decision"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Tejas
+    family-names: Deshmane
+    email: tejasdeshmane66@gmail.com
+repository-code: "https://github.com/Surge77/stockout"
+url: "https://github.com/Surge77/stockout"
+abstract: >-
+  A retail demand forecasting pipeline validated by rolling-origin backtesting, in which
+  temporal leakage is enforced by the test suite rather than by convention, and forecasts
+  are evaluated by the replenishment decision they drive rather than by percentage error
+  alone. The target service level is derived from the newsvendor critical ratio instead of
+  being tuned.
+keywords:
+  - time-series
+  - forecasting
+  - demand-forecasting
+  - backtesting
+  - inventory
+  - retail
+license: MIT
+version: 0.1.0
+date-released: "2026-08-14"

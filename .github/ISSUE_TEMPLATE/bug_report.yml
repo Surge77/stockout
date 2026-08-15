@@ -1,0 +1,51 @@
+name: Bug report
+description: Something behaves differently from what the docs or tests claim
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the bug is a **suspiciously good score**, say so — that is usually leakage,
+        and it is the most valuable kind of report this project can receive.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      placeholder: Paste the command and its full output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        Ideally against the committed synthetic sample, so no Kaggle account is needed.
+      placeholder: |
+        python -m stockout backtest --model seasonal_naive --folds 5 --horizon 42
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "0.1.0, or a commit SHA"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      placeholder: "Windows 11, Python 3.11.9"
+    validations:
+      required: true
