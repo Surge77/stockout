@@ -71,10 +71,10 @@ sample — 4 stores, 730 days, 5 rolling-origin folds, 42-day horizon.
 | `moving_average` | 0.1606 | 1.080 | 8.0% worse |
 | `naive_last` | 0.1695 | 1.144 | 14.4% worse |
 
-The gap between the last two rows is the value of knowing what day of the week it is. The
-gap at the top is worth less than it looks: this generator's promotion calendar and weekday
-pattern are deterministic, so a model with calendar features is being handed most of the
-answer. On Rossmann it would have to earn it again.
+The gap between `seasonal_naive` and `naive_last` is the value of knowing what day of the
+week it is. The gap at the top is worth less than it looks: this generator's promotion
+calendar and weekday pattern are deterministic, so a model with calendar features is being
+handed most of the answer. On Rossmann it would have to earn it again.
 
 And accuracy is not the deliverable. `python -m stockout frontier` prices what stocking to
 each quantile actually costs, on the newest fold, for one store:
@@ -218,9 +218,11 @@ explanation.
   are both in currency units of stock-at-cost — internally consistent, and explicitly *not*
   a unit-level simulation. Converting via an assumed basket size would add decimal places
   and no truth. M5 is the upgrade path.
-- **No cross-series learning.** One model is fitted across stores with `store` as a
-  feature, but nothing shares strength deliberately, and short histories are served worst.
-  Question Q2 exists to measure how much.
+- **Pooled, but only by accident.** The baselines are strictly per store. The
+  gradient-boosted models are one global fit with `store` as a feature, which pools by
+  default and shares nothing deliberately — no hierarchy, no per-store effects, no
+  borrowing toward a group mean. Short histories are served worst either way, and
+  question Q2 exists to measure how much.
 - **The quantile models under-cover out of sample** — a nominal 0.9 delivers about 0.72 of
   trading days. Stocking to a stated service level does not currently deliver it, which is
   why the cheapest level on the sample is 0.90 rather than the derived 0.75.

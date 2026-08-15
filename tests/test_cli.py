@@ -107,6 +107,21 @@ def test_frontier_without_lightgbm_says_what_to_install(
     assert "[gbm]" in err
 
 
+def test_frontier_rejects_a_review_period_before_it_trains_anything(
+    data_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rejecting it after the fit would waste seconds and arrive as a traceback.
+
+    LightGBM is removed to prove the order: if the check ran late, this would fail with
+    the missing-dependency message instead.
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "lightgbm", None)
+    assert main(["frontier", "--data", str(data_file), "--review-period", "0"]) == 1
+    assert "error: --review-period must be at least 1 day" in capsys.readouterr().err
+
+
 def test_frontier_rejects_a_store_that_is_not_in_the_window(
     data_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

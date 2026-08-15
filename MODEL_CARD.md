@@ -25,8 +25,8 @@ mean plus `z * sigma`, because retail errors are neither symmetric nor constant-
 [ADR 0007](docs/decisions/0007-quantiles-not-point-forecast-plus-z-score.md).
 
 Features are calendar covariates that are knowable in advance, plus lags and rolling
-statistics that are all at least one horizon old. `customers` is excluded by a denylist a
-test enforces.
+statistics that are all at least one horizon old. `customers` is excluded by a denylist
+enforced by a test.
 
 Every one predicts zero when the trading calendar says the store is shut. That calendar is
 future-known — it comes from a planning system, not an observation — so using it is not
@@ -83,8 +83,10 @@ Quantile crossing affected 42.9% of rows and was sorted before use.
   not deliver it, and the cost-minimising level on the sample lands at 0.90 rather than at
   the 0.75 the cost pair derives. Reported rather than corrected, because a post-hoc
   calibration shift would hide the fact that it happened.
-- **Per-store, no pooling.** Stores with short histories are served badly and nothing
-  shares strength across series.
+- **Pooled by default, structured not at all.** The baselines fit per store. The
+  gradient-boosted models are a single global fit with `store` as a feature, so they pool
+  incidentally rather than by design — no hierarchy, no per-store effects, no shrinkage
+  toward a group mean. Stores with short histories are served badly either way.
 - **A flat forecast across the horizon.** Each baseline predicts one number per store (or
   per store-weekday) for all 42 days. It cannot represent a trend or an approaching event.
 - **Promotions are ignored** by all three baselines, despite `promo` being available and

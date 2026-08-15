@@ -151,6 +151,12 @@ def _frontier(args: argparse.Namespace) -> int:
     One store, because inventory is held per store and averaging a fill rate across a
     quiet shop and a busy one describes neither of them.
     """
+    # Checked before anything is fitted. `simulate` would reject it too, but only after
+    # LightGBM has spent several seconds training a model nobody can use, and a ValueError
+    # escaping `main` is a traceback rather than a message.
+    if args.review_period < 1:
+        raise BacktestError("--review-period must be at least 1 day")
+
     frame = read_sales(args.data)
     validate_sales(frame)
 

@@ -211,6 +211,13 @@ class GbmQuantileForecaster(_GbmBase):
     ) -> None:
         if any(not 0.0 < q < 1.0 for q in quantiles):
             raise ValueError("quantiles must lie strictly between 0 and 1")
+        if not quantiles:
+            raise ValueError("at least one quantile is required")
+        # Boosters are stored per quantile, so a repeated level would silently drop a
+        # column the caller asked for — and a missing column in a frontier is a missing
+        # option, not a cosmetic difference.
+        if len(set(quantiles)) != len(quantiles):
+            raise ValueError("quantiles must be distinct")
         super().__init__(horizon=horizon, params=params)
         if num_boost_round < 1:
             raise ValueError("num_boost_round must be at least 1")

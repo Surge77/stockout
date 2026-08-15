@@ -49,6 +49,18 @@ def test_quantiles_outside_the_open_unit_interval_are_rejected_at_construction()
         GbmQuantileForecaster(horizon=42, quantiles=[0.5, 1.0])
 
 
+def test_an_empty_quantile_grid_is_rejected() -> None:
+    """Otherwise `fit` succeeds and `predict_quantiles` reports a pre-fit error instead."""
+    with pytest.raises(ValueError, match="at least one quantile"):
+        GbmQuantileForecaster(horizon=42, quantiles=[])
+
+
+def test_repeated_quantiles_are_rejected_rather_than_silently_collapsed() -> None:
+    """Boosters are stored per quantile, so a repeat would drop a requested column."""
+    with pytest.raises(ValueError, match="distinct"):
+        GbmQuantileForecaster(horizon=42, quantiles=[0.5, 0.9, 0.9])
+
+
 def test_a_horizon_below_one_day_is_rejected() -> None:
     with pytest.raises(ValueError, match="at least 1 day"):
         GbmForecaster(horizon=0)
@@ -174,8 +186,33 @@ def test_the_median_prediction_is_the_half_quantile_column(
 def test_the_ninety_percent_quantile_is_roughly_ninety_percent_covered(
     quantile_model: GbmQuantileForecaster, sales: pd.DataFrame
 ) -> None:
-    """A 0.9 quantile covering 99% is not conservative; it is wrong, and it costs money."""
+    """A 0.9 quantile covering 99% is not conservative; it is wrong, and it costs money.
+
+    In sample, where the fit has seen the spread it is being asked to bracket. The
+    out-of-sample answer is different and worse, which is the test below.
+    """
     from stockout.evaluate.metrics import coverage
 
     predicted = quantile_model.predict_quantiles(sales)
     assert coverage(sales["sales"], predicted["0.9"]) == pytest.approx(0.9, abs=0.05)
+
+
+def test_out_of_sample_the_quantiles_under_cover(sales: pd.DataFrame) -> None:
+    """Pins a known defect, so that fixing it is a visible diff rather than a silent one.
+
+    On held-out data every nominal level covers less than it claims — a stated 0.9
+    delivers roughly 0.72 of trading days. That is why the cost-minimising service level
+    in `docs/results.md` lands at 0.90 rather than at the 0.75 the cost pair derives.
+    When calibration is fixed this assertion should start failing, and it is supposed to.
+    """
+    from stockout.evaluate.metrics import coverage
+    from stockout.split.rolling import rolling_origin, split_frame
+
+    fold = rolling_origin(sales[s.DATE], n_folds=1, horizon=42)[-1]
+    train, test = split_frame(sales, fold)
+
+    predicted = GbmQuantileForecaster(horizon=42).fit(train).predict_quantiles(test)
+    trading = test[s.OPEN] == 1
+    covered = coverage(test.loc[trading, s.SALES], predicted.loc[trading, "0.9"])
+
+    assert 0.55 < covered < 0.90, f"0.9 quantile covered {covered:.3f} out of sample"
