@@ -62,6 +62,58 @@ def test_an_unknown_model_is_rejected_by_the_parser(data_file: Path) -> None:
     assert excinfo.value.code == 2
 
 
+def test_backtest_runs_the_gradient_boosted_model_and_reports_beating_the_baseline(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The model is reachable from the command line, not only from a notebook."""
+    assert main(["backtest", "--data", str(data_file), "--model", "gbm", "--folds", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "`gbm`" in out
+    assert "beats seasonal-naive" in out
+
+
+def test_frontier_prices_every_service_level_and_names_the_cheapest(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["frontier", "--data", str(data_file)]) == 0
+    out = capsys.readouterr().out
+    assert "newsvendor target quantile 0.75" in out
+    assert "quantile crossing on" in out
+    assert "| quantile" in out
+    assert "Cheapest at quantile" in out
+
+
+def test_frontier_costs_more_stock_for_more_service(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The curve has to slope, or the table is decoration."""
+    assert main(["frontier", "--data", str(data_file)]) == 0
+    rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("| 0.")]
+    held = [float(row.split("|")[8].strip().replace(",", "")) for row in rows]
+    assert held == sorted(held)
+    assert held[0] < held[-1]
+
+
+def test_frontier_without_lightgbm_says_what_to_install(
+    data_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The bare install must reach the model and then explain itself, not fail at import."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "lightgbm", None)
+    assert main(["frontier", "--data", str(data_file)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: LightGBM is not installed")
+    assert "[gbm]" in err
+
+
+def test_frontier_rejects_a_store_that_is_not_in_the_window(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["frontier", "--data", str(data_file), "--store", "999"]) == 1
+    assert "store 999 has no rows" in capsys.readouterr().err
+
+
 def test_a_missing_data_file_is_a_one_line_error_not_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

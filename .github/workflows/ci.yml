@@ -84,6 +84,20 @@ jobs:
           python -m stockout backtest --model naive_last | tee naive.txt
           grep -q "loses" naive.txt
 
+      - name: Without the gbm extra, the model path fails readably rather than crashing
+        # This job installs the bare package on purpose. `frontier` is the one command
+        # that needs LightGBM, so it is also the proof that the import really is lazy:
+        # the CLI must parse, load the data and then say what to install — not raise
+        # ImportError at `import stockout`.
+        run: |
+          if python -m stockout frontier 2> frontier.txt; then
+            echo "expected a non-zero exit without LightGBM installed"
+            exit 1
+          fi
+          cat frontier.txt
+          grep -q "^error: LightGBM is not installed" frontier.txt
+          grep -q "\[gbm\]" frontier.txt
+
       # The absence of a shuffled splitter is checked by tests/test_no_random_splits.py,
       # which parses the AST rather than grepping. A text search cannot distinguish code
       # from the docstrings explaining why the code is absent — the first version of this

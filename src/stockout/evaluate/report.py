@@ -46,6 +46,52 @@ def to_markdown(results: pd.DataFrame, *, model_name: str) -> str:
     return f"{header}\n\n{table}\n\n{_verdict_line(results)}\n"
 
 
+_FRONTIER_FORMATS: dict[str, str] = {
+    "quantile": "{:.2f}",
+    "fill_rate": "{:.4f}",
+    "cycle_service_level": "{:.3f}",
+    "holding_cost": "{:,.0f}",
+    "shortage_cost": "{:,.0f}",
+    "total_cost": "{:,.0f}",
+    "mean_on_hand": "{:,.0f}",
+}
+
+
+def frontier_to_markdown(table: pd.DataFrame) -> str:
+    """The cost of each service level, and which one was cheapest.
+
+    Naming the winner is the whole point. A frontier table that leaves the reader to
+    scan for the smallest number is a chart pretending to be an argument.
+    """
+    if table.empty:
+        return "No service levels were priced."
+
+    display = table.copy()
+    for column, fmt in _FRONTIER_FORMATS.items():
+        if column in display.columns:
+            display[column] = display[column].map(lambda v, f=fmt: f.format(v))
+
+    header = f"### the cost of stocking to each quantile — {len(table)} levels priced"
+    body = _markdown_table(
+        [str(c) for c in display.columns],
+        [[str(v) for v in row] for row in display.itertuples(index=False)],
+    )
+    return f"{header}\n\n{body}\n\n{_cheapest_line(table)}\n"
+
+
+def _cheapest_line(table: pd.DataFrame) -> str:
+    """Positional rather than label-based: a frontier's index carries no meaning."""
+    costs = table["total_cost"].to_numpy(dtype="float64")
+    best = int(costs.argmin())
+    quantile = float(table["quantile"].to_numpy(dtype="float64")[best])
+    fill_rate = float(table["fill_rate"].to_numpy(dtype="float64")[best])
+    short_days = int(table["stockout_days"].to_numpy(dtype="int64")[best])
+    return (
+        f"**Cheapest at quantile {quantile:.2f}** — total cost {costs[best]:,.0f}, "
+        f"fill rate {fill_rate:.1%}, {short_days} short day(s)."
+    )
+
+
 def _markdown_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     widths = [len(h) for h in headers]
     for row in rows:

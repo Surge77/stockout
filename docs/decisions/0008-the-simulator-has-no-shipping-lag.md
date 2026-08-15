@@ -1,31 +1,19 @@
-# 0008 — The simulator has no shipping lag, because the level already carries it
+# 0008 — The simulator prices a repeated newsvendor, not an (R, S) system
 
 ## Situation
 
-An order-up-to system has two places a lead time can live.
+An order-up-to system can put the lead time in either of two places.
 
-It can live in the **level**: `S` is built to cover demand across the protection interval
-`L + R`, so that stock ordered now carries the store until the next order can arrive.
-`inventory/policy.py::order_up_to_level` does exactly this — a forward sum of the quantile
-forecast over `lead_time + review_period`.
+It can live in the **level**: `S` covers demand across the protection interval `L + R`, so
+stock ordered now carries the store until the next order can arrive.
+`inventory/policy.py::order_up_to_level` builds exactly that — a forward sum of the
+quantile forecast over `lead_time + review_period`.
 
-It can also live in the **loop**: an order placed on day `t` arrives on day `t + L`, and
-until then the shelf has whatever it had.
+It can live in the **loop**: an order placed on day `t` arrives on day `t + L`, and until
+then the shelf has whatever it had.
 
-Both are standard. Doing both to the same order is not: the store would be sized to
-survive the wait *and* made to wait, and the protection interval would be paid for twice.
-
-## Decision
-
-The lead time lives in the level. `simulate` raises on-hand stock to `S` at the start of
-every day with no delivery delay, serves demand, and loses whatever it could not serve.
-`lead_time_days` is therefore a parameter of `order_up_to_level` and of `frontier`, which
-builds levels — and is **not** a parameter of `simulate`, which consumes them. The stub
-signature had it on `simulate`; it was removed rather than left in and ignored, because an
-argument that changes nothing is worse than an absent one.
-
-The committed specification tests forced the question and settled it. From
-`tests/test_simulate.py`:
+Both are standard. Doing both to the same order is not, and the committed specification
+tests rule the loop version out. From `tests/test_simulate.py`:
 
 ```python
 demand = pd.Series([50.0, 200.0, 50.0])
@@ -33,25 +21,38 @@ result = simulate(demand, pd.Series([50.0] * 3), initial_stock=50.0)
 assert result.stockout_days == 1
 ```
 
-Day one is served, day two is short by 150, and day three is served again. Under any
-model with a delivery delay, day three is short too and the answer is 2. The test is
-asserting that a shortfall does not queue — the point of lost-sales retail — and it can
-only do that if the shelf is refilled between the two.
+Day one is served, day two is short by 150, day three is served again. Under any model
+with a delivery delay, day three is short too and the answer is 2. The test asserts that a
+shortfall does not queue — the point of lost-sales retail — and it can only do that if the
+shelf is refilled between the two. The stub's docstring claimed a lead time in the loop;
+the stub's tests contradicted it. The tests are the executable half, so they win.
+
+## Decision
+
+`simulate` raises on-hand stock to `S` at the start of every day, serves demand, and loses
+what it could not serve. The protection interval is therefore one day, which makes each
+day a **single-period stocking decision** — precisely the problem the newsvendor critical
+ratio solves, and precisely what this project is named around. `frontier` stocks to each
+day's own demand quantile and prices the outcome. `lead_time_days` appears on neither.
+
+`order_up_to_level` remains, tested and documented, as the `(R, S)` base-stock formula.
+It is the bridge to a pipeline simulator, not a component of this one.
 
 ## Cost
 
-**Holding cost is biased high, and the bias is structural.** A real `(R, S)` system lets
-stock cycle down between deliveries; average on-hand across a cycle is roughly half the
-cycle stock plus the safety stock. Refilling daily holds the full protection interval
-every day. The absolute currency figures the simulator prints are therefore not a budget.
+**The multi-period system is not simulated, so nothing here can show a bullwhip.**
+`order_quantity`, which counts stock in transit precisely to avoid one, is exercised by
+its own tests rather than by the simulator.
 
-**What survives the bias is the ordering**, which is what the frontier is read for. Every
-curve — seasonal-naive, GBM point, GBM quantile — is simulated under the identical rule,
-so "which curve sits below and to the right" is unaffected. The chart is a comparison, and
-was only ever a comparison.
+**Feeding an `(R, S)` level into this loop is a trap, and it was walked into once.** The
+first frontier this repo produced applied `order_up_to_level` with the default `L=7, R=7`
+and refilled daily. On store 1 of the committed sample that is a level of 96,159 against a
+mean daily demand of 8,132 — **11.8 days of cover held every single day**. Every service
+level returned a fill rate of 1.0000 and zero stockouts, the total-cost column became
+monotone in the quantile, and the chart had no trade-off left in it.
+`test_the_frontier_stocks_to_the_forecast_itself_not_to_a_multi_day_cover` exists so that
+it cannot happen quietly again.
 
-**A pipeline is not modelled at all**, so nothing here can show a bullwhip, and
-`order_quantity` — which counts stock in transit precisely to avoid one — is exercised by
-its own tests rather than by the simulator. If the project later needs absolute costs
-rather than a ranking, this is the first thing to replace, and the fix is a delivery queue
-plus a primed pipeline at `t = 0`.
+**Absolute currency figures are still not a budget.** Real stores hold safety stock across
+a lead time; this one does not. What the frontier supports is the ordering of curves, and
+every curve is simulated under the identical rule.

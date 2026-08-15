@@ -10,14 +10,19 @@ forecaster, and plot cost against fill rate. Three curves — seasonal-naive, GB
 with a normal safety stock, GBM quantile — on one efficient-frontier chart. Whichever
 curve sits below and to the right wins, and the chart is the argument.
 
-**How replenishment is timed, and what that costs.** Stock is raised to the order-up-to
-level at the start of every day, with no shipping lag inside the loop. The lead time is
-not ignored — it is already inside the *level*, which `policy.order_up_to_level` builds by
-summing the forecast across the lead time plus one review period. Applying it again here
-would charge the protection interval twice. What this does bias is holding cost: a real
-(R, S) system lets stock cycle down between deliveries and this one refills daily, so
-carried stock is overstated. Every curve on the frontier carries the same bias, which is
-why the chart is read as an ordering of curves and not as a budget. Recorded in ADR 0008.
+**What is being simulated is a repeated newsvendor.** Stock is raised to the order-up-to
+level at the start of every day, demand arrives, and whatever was not served walks out.
+There is no shipping lag inside the loop, so the protection interval is one day — which
+makes each day a single-period stocking decision, which is exactly the problem
+`policy.critical_ratio` solves. The cost-minimising quantile should therefore land near
+`Cu / (Cu + Co)`, and that is a claim the frontier can be checked against rather than a
+framing chosen for convenience.
+
+The multi-period `(R, S)` system — order every `R` days, wait `L` for delivery, size `S`
+to cover `L + R` — is a different model, and `policy.order_up_to_level` builds its level.
+Feeding that level to this loop is the one thing not to do: a level sized to survive a
+wait, refilled daily, is permanent overstock, and every service level saturates at a fill
+rate of 1.0 with no trade-off left to see. Recorded in ADR 0008, with the measurement.
 
 **The honesty note that must survive into the README.** Rossmann records store-level
 revenue, not SKU units, and has no inventory column at all. Demand and stock here are
@@ -35,12 +40,10 @@ import numpy as np
 import pandas as pd
 
 from ..config import (
-    DEFAULT_LEAD_TIME_DAYS,
     DEFAULT_OVERAGE_COST,
     DEFAULT_REVIEW_PERIOD_DAYS,
     DEFAULT_UNDERAGE_COST,
 )
-from .policy import order_up_to_level
 
 FRONTIER_COLUMNS: tuple[str, ...] = (
     "quantile",
@@ -143,31 +146,35 @@ def frontier(
     demand: pd.Series,
     quantile_forecasts: pd.DataFrame,
     *,
-    lead_time_days: int = DEFAULT_LEAD_TIME_DAYS,
     review_period_days: int = DEFAULT_REVIEW_PERIOD_DAYS,
     initial_stock: float = 0.0,
+    holding_cost: float = DEFAULT_OVERAGE_COST,
+    shortage_cost: float = DEFAULT_UNDERAGE_COST,
 ) -> pd.DataFrame:
     """Cost and fill rate at each target service level, for the efficient-frontier plot.
 
     One row per column of `quantile_forecasts`, in the order the columns arrive. Each
-    column is read as a per-day demand quantile and turned into a base-stock level by
-    `order_up_to_level`, which is where the lead time enters — once.
+    column is that day's demand quantile and is stocked to directly, because the decision
+    being priced is a single-period one; see the module docstring for why a multi-period
+    base-stock level does not belong here.
+
+    `review_period_days` groups days into cycles for `cycle_service_level` and does not
+    change what is ordered. The cost pair is the same one `policy.critical_ratio` derives
+    the service level from, and passing it rather than reading a constant is what keeps
+    the two consistent when a caller overrides it.
     """
     if quantile_forecasts.shape[1] == 0:
         raise ValueError("no quantile forecasts to price")
 
     rows = []
     for name in quantile_forecasts.columns:
-        level = order_up_to_level(
-            quantile_forecasts[name],
-            lead_time_days=lead_time_days,
-            review_period_days=review_period_days,
-        )
         result = simulate(
             demand,
-            level,
+            quantile_forecasts[name],
             review_period_days=review_period_days,
             initial_stock=initial_stock,
+            holding_cost=holding_cost,
+            shortage_cost=shortage_cost,
         )
         rows.append(
             {

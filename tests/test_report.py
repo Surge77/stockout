@@ -72,3 +72,31 @@ def test_numbers_are_formatted_to_a_stable_precision() -> None:
     out = to_markdown(_results(0.95), model_name="x")
     assert "0.1500" in out
     assert pytest.approx(0.95) == 0.95
+
+
+def test_the_frontier_table_names_the_cheapest_service_level() -> None:
+    """Leaving the reader to scan for the smallest number is a chart, not an argument."""
+    from stockout.evaluate.report import frontier_to_markdown
+
+    table = pd.DataFrame(
+        {
+            "quantile": [0.5, 0.9],
+            "fill_rate": [0.90, 0.99],
+            "cycle_service_level": [0.5, 0.9],
+            "stockout_days": [12, 2],
+            "holding_cost": [100.0, 900.0],
+            "shortage_cost": [900.0, 100.0],
+            "total_cost": [1000.0, 1000.0 - 1.0],
+            "mean_on_hand": [10.0, 90.0],
+        }
+    )
+    out = frontier_to_markdown(table)
+    assert "Cheapest at quantile 0.90" in out
+    assert "2 short day(s)" in out
+    assert "| quantile" in out
+
+
+def test_an_unpriced_frontier_says_so_rather_than_rendering_an_empty_table() -> None:
+    from stockout.evaluate.report import frontier_to_markdown
+
+    assert "No service levels" in frontier_to_markdown(pd.DataFrame())

@@ -44,8 +44,10 @@ if TYPE_CHECKING:
     import lightgbm as lgb
 
 #: The service-level quantiles worth fitting. 0.5 is the median point forecast; the rest
-#: bracket the newsvendor critical ratios that realistic cost pairs produce.
-DEFAULT_QUANTILES: tuple[float, ...] = (0.5, 0.8, 0.9, 0.95, 0.99)
+#: bracket the newsvendor critical ratios that realistic cost pairs produce. 0.75 is the
+#: ratio the *default* cost pair produces, and it is on the grid so that the frontier can
+#: price the derived target itself rather than the nearest round number to it.
+DEFAULT_QUANTILES: tuple[float, ...] = (0.5, 0.75, 0.8, 0.9, 0.95, 0.99)
 
 #: `seed` here is a seeded *sampler* — row and column subsampling inside boosting — and
 #: not a seeded *split*. The distinction is the one `tests/test_no_random_splits.py`

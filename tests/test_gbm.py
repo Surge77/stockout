@@ -103,6 +103,28 @@ def test_a_training_window_shorter_than_its_lags_fails_loudly(tiny: pd.DataFrame
         GbmForecaster(horizon=42).fit(tiny)
 
 
+def test_the_registry_hands_back_a_zero_argument_factory() -> None:
+    """`backtest` builds a fresh model per fold, so it needs a factory, not an instance.
+
+    The baselines take no horizon — same-weekday-last-week is the same rule at any — so
+    the registry is what lets one `--model` flag cover both kinds.
+    """
+    from stockout.models import FORECASTER_NAMES, forecaster
+
+    assert {"gbm", "gbm_quantile", "seasonal_naive"} <= set(FORECASTER_NAMES)
+    built = forecaster("gbm", horizon=7)()
+    assert isinstance(built, GbmForecaster)
+    assert built.horizon == 7
+    assert forecaster("seasonal_naive", horizon=7)().name == "seasonal_naive"
+
+
+def test_an_unknown_forecaster_lists_the_ones_that_exist() -> None:
+    from stockout.models import forecaster
+
+    with pytest.raises(KeyError, match="unknown forecaster"):
+        forecaster("prophet", horizon=7)
+
+
 def test_customers_never_reaches_the_model(point_model: GbmForecaster) -> None:
     """The denylist is enforced where it matters — in the fitted feature list."""
     assert s.CUSTOMERS not in point_model.features

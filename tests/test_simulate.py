@@ -119,11 +119,24 @@ def test_the_frontier_reads_its_quantile_out_of_the_column_label() -> None:
     assert pd.isna(table["quantile"].iloc[1])
 
 
+def test_the_frontier_stocks_to_the_forecast_itself_not_to_a_multi_day_cover() -> None:
+    """Guards the mistake that flattened the first frontier this repo produced.
+
+    A base-stock level sized to survive a lead time, refilled every day, is permanent
+    overstock: every service level saturates at a fill rate of 1.0 and there is no
+    trade-off left to plot. Stocking to the day's own quantile is what makes the curve
+    a curve.
+    """
+    demand = pd.Series([100.0] * 30)
+    table = frontier(demand, pd.DataFrame({"0.5": [50.0] * 30}))
+    assert table["fill_rate"].iloc[0] == pytest.approx(0.5)
+
+
 def test_a_higher_quantile_buys_fill_rate_with_carried_stock() -> None:
     """The frontier read as it is meant to be: better service, more stock, both monotone."""
     demand = pd.Series([100.0] * 60)
     quantiles = pd.DataFrame({"0.5": [90.0] * 60, "0.9": [120.0] * 60})
-    table = frontier(demand, quantiles, lead_time_days=0, review_period_days=1)
+    table = frontier(demand, quantiles, review_period_days=1)
 
     assert table["fill_rate"].is_monotonic_increasing
     assert table["mean_on_hand"].is_monotonic_increasing
