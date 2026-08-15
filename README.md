@@ -3,7 +3,7 @@
 [![CI](https://github.com/Surge77/stockout/actions/workflows/ci.yml/badge.svg)](https://github.com/Surge77/stockout/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
-[![Coverage 98%](https://img.shields.io/badge/coverage-98%25-brightgreen)](#testing)
+[![Coverage 99%](https://img.shields.io/badge/coverage-99%25-brightgreen)](#testing)
 [![Checked with pyright](https://img.shields.io/badge/types-pyright-blue)](https://github.com/microsoft/pyright)
 
 Forecasts retail demand to drive **replenishment**, and is scored on the decision — stock
@@ -15,7 +15,8 @@ Named after the failure it exists to prevent.
 ```bash
 pip install -e ".[dev]"
 python -m stockout describe                            # what's in the sample
-python -m stockout backtest --model seasonal_naive     # a real number, no ML yet
+python -m stockout backtest --model gbm                # beats the baseline by 47%
+python -m stockout frontier                            # what that forecast costs to stock
 ```
 
 ## Why this project exists
@@ -46,17 +47,16 @@ the target moves; rerun a grid search, it does not.
 ## What's in here, and what isn't
 
 **In the package** — acquisition, schema validation, cleaning, splitting, feature
-construction, metrics, the backtest loop, three baselines. Everything with one correct
-answer, tested and type-checked.
+construction, metrics, the backtest loop, three baselines, a LightGBM point model and a
+quantile model, and the inventory simulator that prices what stocking to each level costs.
+Everything with one correct answer, tested and type-checked.
 
 **In the notebook** — the analysis. The five questions are committed in
 [docs/questions.md](docs/questions.md) *before* any chart exists, so findings cannot be
 retrofitted to whatever turned up. See [ADR 0006](docs/decisions/0006-analysis-in-notebooks.md).
 
-**Not built yet** — the LightGBM point and quantile models (`models/gbm.py`) and the
-inventory simulator (`inventory/`) are typed stubs with their reasoning committed and
-their tests written and skipped. The specification exists; the implementation does not.
-The backtest harness runs without them.
+**Not answered yet** — those five questions. They are about retail, and every number in
+this repository was produced by a generator. See [Known limits](#known-limits).
 
 ## Current state
 
@@ -65,13 +65,37 @@ sample — 4 stores, 730 days, 5 rolling-origin folds, 42-day horizon.
 
 | Model | Mean WMAPE | MASE | |
 |---|---|---|---|
-| `seasonal_naive` | 0.1489 | **1.000** | the baseline, by definition |
+| `gbm` | 0.0793 | **0.533** | beats the baseline by 46.7% |
+| `gbm_quantile` | 0.0811 | 0.545 | the median of the quantile fit |
+| `seasonal_naive` | 0.1489 | 1.000 | the baseline, by definition |
 | `moving_average` | 0.1606 | 1.080 | 8.0% worse |
 | `naive_last` | 0.1695 | 1.144 | 14.4% worse |
 
-The gap between the top and bottom rows is the value of knowing what day of the week it
-is. **No model has beaten the baseline yet, because no model exists yet** — that is the
-point of establishing the floor first.
+The gap between the last two rows is the value of knowing what day of the week it is. The
+gap at the top is worth less than it looks: this generator's promotion calendar and weekday
+pattern are deterministic, so a model with calendar features is being handed most of the
+answer. On Rossmann it would have to earn it again.
+
+And accuracy is not the deliverable. `python -m stockout frontier` prices what stocking to
+each quantile actually costs, on the newest fold, for one store:
+
+| quantile | fill rate | stockout days | holding | shortage | **total** |
+|---|---|---|---|---|---|
+| 0.50 | 0.945 | 22 | 8,794 | 56,291 | 65,086 |
+| 0.75 | 0.963 | 18 | 15,238 | 37,626 | 52,864 |
+| 0.80 | 0.971 | 18 | 17,720 | 30,274 | 47,994 |
+| 0.90 | 0.980 | 10 | 23,907 | 20,364 | **44,271** |
+| 0.95 | 0.984 | 8 | 30,102 | 16,318 | 46,420 |
+| 0.99 | 0.990 | 6 | 38,926 | 10,544 | 49,470 |
+
+Cost is U-shaped in the service level, so there is a cheapest place to stand and it is not
+"as accurate as possible". That curve is the project.
+
+**It is also not where the theory says it should be.** The cost pair (`Cu` 3, `Co` 1)
+derives a critical ratio of 0.75, and 0.75 is not the cheapest row — 0.90 is. The reason is
+measurable rather than mysterious: the quantile models under-cover out of sample, so a
+nominal 0.9 delivers about 0.72, and you have to over-ask to land on the service level you
+wanted. Recorded in [docs/results.md](docs/results.md) as a failure, not smoothed over.
 
 ## The four traps this data sets
 
@@ -101,11 +125,17 @@ pip install -e ".[dev,notebook]"
 python -m stockout describe                          # rows, stores, nulls, calendar gaps
 python -m stockout backtest --model seasonal_naive   # the baseline
 python -m stockout backtest --model naive_last       # what ignoring the weekday costs
+python -m stockout backtest --model gbm               # the gradient-boosted model
+python -m stockout frontier --store 3                # the cost of each service level
 python -m stockout synth --out data/mine.csv --stores 20 --days 1095
 ```
 
 Useful flags: `--horizon`, `--folds`, `--gap`, `--min-train-days`, and `--sliding` for a
 fixed-width training window instead of an expanding one.
+
+The `gbm` models need LightGBM: `pip install -e ".[gbm]"`. Everything else runs without it,
+and asking for a model you have not installed prints one line saying so rather than a
+traceback.
 
 ## Data
 
@@ -140,13 +170,14 @@ src/stockout/
 ├── evaluate/metrics.py WMAPE, MASE, RMSPE, pinball, coverage. Deliberately no MAPE
 ├── evaluate/backtest.py the fold loop; a fresh model per fold
 ├── models/baselines.py naive_last, seasonal_naive, moving_average
-├── models/gbm.py       STUB — LightGBM point (tweedie) and quantile
-├── inventory/          STUB — order-up-to policy and the cost simulation
-└── cli.py              stockout fetch | synth | describe | backtest
+├── models/gbm.py       LightGBM point (tweedie) and quantile; imported lazily
+├── inventory/policy.py the critical ratio, the base-stock level, the order
+├── inventory/simulate.py the day-by-day walk, and the efficient frontier
+└── cli.py              stockout fetch | synth | describe | backtest | frontier
 
 docs/questions.md       the five hypotheses, written first
 docs/results.md         the answers — empty until the analysis is done
-docs/decisions/         seven ADRs, each stating what the decision cost
+docs/decisions/         eight ADRs, each stating what the decision cost
 notebooks/              the analysis
 data/                   gitignored, except one small synthetic sample
 reports/                generated charts — regenerated, never committed
@@ -157,7 +188,7 @@ reports/                generated charts — regenerated, never committed
 ```bash
 ruff check .                                  # lint only; never `ruff format` (ADR 0004)
 pyright                                       # type gate
-pytest --cov --cov-fail-under=90              # 232 passing, 10 skipped, 98% covered
+pytest --cov --cov-fail-under=90              # 279 passing, 0 skipped, 99% covered
 ```
 
 Unit tests never touch the network. A `conftest.py` autouse fixture replaces
@@ -165,9 +196,12 @@ Unit tests never touch the network. A `conftest.py` autouse fixture replaces
 laptop that happens to have credentials and failing in CI. Network work goes behind
 `@pytest.mark.integration`, excluded by default.
 
-The ten skipped tests are the specification for the unbuilt half — the GBM models and the
-inventory simulator. They are written first on purpose, so the intended behaviour is on
-record before the implementation can shape it.
+The ten tests that used to be skipped were the specification for the unbuilt half. They
+are green now, and one of them settled a design question the prose had got wrong: the
+stub's docstring described a delivery lead time inside the simulator, while its own test
+required that a shortfall on one day not carry into the next. Only one of those could
+survive, and the executable one won —
+[ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md).
 
 `tests/test_no_random_splits.py` parses every module's AST and asserts that no shuffled
 split, no `random_state`, and no scikit-learn import executes anywhere in the package. It
@@ -180,14 +214,20 @@ explanation.
 - **The committed sample is synthetic.** It reproduces four structures that make the real
   problem hard, and nothing else. Anything learned from it is a statement about a
   generator, not about retail. It is used to test machinery, never to support a finding.
-- **Rossmann is revenue, not units, and has no inventory column at all.** When the
-  simulator lands, demand and stock will both be in currency units of stock-at-cost —
-  internally consistent, and explicitly *not* a unit-level simulation. Converting via an
-  assumed basket size would add decimal places and no truth. M5 is the upgrade path.
-- **No cross-series learning.** Per-store baselines cannot share structure between stores,
-  which hurts short histories most. Question Q2 exists to measure how much.
-- **The decision layer is unbuilt**, so the central claim — that stocking to a forecast
-  quantile beats stocking to a mean — is currently a hypothesis (Q5), not a result.
+- **Rossmann is revenue, not units, and has no inventory column at all.** Demand and stock
+  are both in currency units of stock-at-cost — internally consistent, and explicitly *not*
+  a unit-level simulation. Converting via an assumed basket size would add decimal places
+  and no truth. M5 is the upgrade path.
+- **No cross-series learning.** One model is fitted across stores with `store` as a
+  feature, but nothing shares strength deliberately, and short histories are served worst.
+  Question Q2 exists to measure how much.
+- **The quantile models under-cover out of sample** — a nominal 0.9 delivers about 0.72 of
+  trading days. Stocking to a stated service level does not currently deliver it, which is
+  why the cheapest level on the sample is 0.90 rather than the derived 0.75.
+- **The simulator has no delivery pipeline.** It prices a repeated single-period
+  newsvendor: stock is topped up daily, unmet demand is lost. Absolute currency figures are
+  an ordering of options, not a budget —
+  [ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md).
 
 ## Documentation
 
@@ -196,7 +236,7 @@ explanation.
 - [docs/architecture.md](docs/architecture.md) — flow, the three guards, module map
 - [docs/data-dictionary.md](docs/data-dictionary.md) — columns, traps, future-known vs observed
 - [docs/glossary.md](docs/glossary.md) — forecasting and inventory terms
-- [docs/decisions/](docs/decisions/) — seven ADRs, each with its cost
+- [docs/decisions/](docs/decisions/) — eight ADRs, each with its cost
 - [MODEL_CARD.md](MODEL_CARD.md) — what the models are, and are not, for
 
 ## Licence

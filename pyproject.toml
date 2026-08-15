@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockout"
-version = "0.1.0"
+version = "0.2.0"
 description = "Retail demand forecasting scored by the decision it drives — replenishment — with rolling-origin backtesting and leakage guards that fail the test suite, not the code review."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -21,8 +21,16 @@ data/raw/train.csv          data.synth.make_sales
                       v
               evaluate.report.to_markdown   a table, and a verdict line
                       v
-              inventory.simulate            << not built yet (P4)
+              inventory.policy              critical ratio -> the quantile to stock to
+                      v
+              inventory.simulate.frontier   cost and fill rate per service level
+                      v
+              evaluate.report.frontier_to_markdown   names the cheapest level
 ```
+
+The second half of that chain is what makes the project an argument rather than a score.
+`backtest` answers "how wrong is the forecast"; `frontier` answers "what does being that
+wrong cost", and those two questions order the models differently.
 
 ## The three guards
 
@@ -75,14 +83,15 @@ src/stockout/
 ├── models/
 │   ├── base.py        Forecaster protocol; zero_when_closed; open_rows
 │   ├── baselines.py   naive_last, seasonal_naive, moving_average
-│   └── gbm.py         STUB — point (tweedie) and quantile
+│   ├── gbm.py         point (tweedie) and quantile; LightGBM imported inside fit()
+│   └── __init__.py    the name -> factory registry the CLI's --model reads
 ├── evaluate/
 │   ├── metrics.py     WMAPE, MASE, RMSPE, pinball, coverage. No MAPE
 │   ├── backtest.py    the rolling-origin loop; fresh model per fold
 │   └── report.py      markdown table + a verdict that names the loser
 └── inventory/
-    ├── policy.py      critical_ratio implemented; order-up-to STUB
-    └── simulate.py    STUB — fill rate, holding cost, efficient frontier
+    ├── policy.py      critical_ratio, the base-stock level, the order it implies
+    └── simulate.py    fill rate, holding and shortage cost, the efficient frontier
 ```
 
 Every file is under the 300-line limit. `evaluate/metrics.py` and `features/lags.py` are

@@ -1,8 +1,7 @@
 # Model card — stockout
 
-**Status: baselines only.** No learned model has been trained. This card describes what
-exists today and states plainly what does not, so that nothing here can be mistaken for a
-result. It is updated when the gradient-boosted models land.
+**Status: five forecasters, evaluated on synthetic data only.** Every number below comes
+from a generator, not from retail, and is stated that way wherever it appears.
 
 ## What exists
 
@@ -13,6 +12,21 @@ Three baselines, all fitted per store on trading days only.
 | `naive_last` | Most recent trading-day figure | none |
 | `seasonal_naive` | Most recent same store, same weekday | `season_length = 7` |
 | `moving_average` | Mean of the last `window` trading days | `window = 28` |
+
+Two gradient-boosted models, fitted on the horizon-aware feature matrix.
+
+| Model | Objective | Parameters |
+|---|---|---|
+| `gbm` | `tweedie`, variance power 1.2 | 800 rounds, lr 0.05, 63 leaves, min 100 per leaf |
+| `gbm_quantile` | `quantile` at each of 6 alphas | one booster per quantile, same tree settings |
+
+Tweedie because sales are non-negative with a point mass at zero. Quantiles rather than a
+mean plus `z * sigma`, because retail errors are neither symmetric nor constant-variance —
+[ADR 0007](docs/decisions/0007-quantiles-not-point-forecast-plus-z-score.md).
+
+Features are calendar covariates that are knowable in advance, plus lags and rolling
+statistics that are all at least one horizon old. `customers` is excluded by a denylist a
+test enforces.
 
 Every one predicts zero when the trading calendar says the store is shut. That calendar is
 future-known — it comes from a planning system, not an observation — so using it is not
@@ -39,21 +53,45 @@ window. Closed days excluded from scoring. Metrics: WMAPE (primary), MASE agains
 seasonal-naive, RMSPE (Kaggle's metric). MAPE is deliberately absent —
 [ADR 0005](docs/decisions/0005-wmape-and-mase-not-mape.md).
 
-On the synthetic sample: `seasonal_naive` WMAPE 0.1489 (MASE 1.000 by definition),
-`moving_average` 1.080, `naive_last` 1.144.
+On the synthetic sample:
 
-**These are synthetic-data figures and are not evidence about retail forecasting.**
+| Model | WMAPE | MASE | RMSPE |
+|---|---|---|---|
+| `gbm` | 0.0793 | **0.533** | 0.1018 |
+| `gbm_quantile` | 0.0811 | 0.545 | 0.1053 |
+| `seasonal_naive` | 0.1489 | 1.000 | 0.1931 |
+| `moving_average` | 0.1606 | 1.080 | 0.2195 |
+| `naive_last` | 0.1695 | 1.144 | 0.2177 |
+
+**These are synthetic-data figures and are not evidence about retail forecasting.** The
+generator's promotion calendar and weekday pattern are deterministic, so a model with
+calendar features has an advantage here that it would have to re-earn on Rossmann.
+
+Quantile calibration is measured, not assumed, and it is the weakest result in the repo.
+Out of sample on the newest fold, every level under-covers:
+
+| Nominal | 0.50 | 0.75 | 0.80 | 0.90 | 0.95 | 0.99 |
+|---|---|---|---|---|---|---|
+| Covered (trading days) | 0.357 | 0.564 | 0.607 | 0.721 | 0.843 | 0.893 |
+
+Quantile crossing affected 42.9% of rows and was sorted before use.
 
 ## Limitations
 
-- **No learned model.** Any claim about gradient boosting in this repository is a plan,
-  not a measurement.
+- **The quantile models are not calibrated out of sample.** A nominal 0.9 covers about
+  0.72 of trading days on held-out data. Stocking to a stated service level therefore does
+  not deliver it, and the cost-minimising level on the sample lands at 0.90 rather than at
+  the 0.75 the cost pair derives. Reported rather than corrected, because a post-hoc
+  calibration shift would hide the fact that it happened.
 - **Per-store, no pooling.** Stores with short histories are served badly and nothing
   shares strength across series.
 - **A flat forecast across the horizon.** Each baseline predicts one number per store (or
   per store-weekday) for all 42 days. It cannot represent a trend or an approaching event.
 - **Promotions are ignored** by all three baselines, despite `promo` being available and
-  future-known.
+  future-known. The gradient-boosted models do use them.
+- **The simulator has no delivery pipeline.** It prices a repeated single-period
+  newsvendor, so its absolute currency figures are an ordering of options and not a
+  budget — [ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md).
 - **Synthetic evaluation only**, so far.
 
 ## Ethical and practical considerations
@@ -69,7 +107,9 @@ service level is derived from costs rather than defaulted to a round number.
 
 ## What would change this card
 
-Implementing `models/gbm.py`, then reporting the backtest honestly — including the
-outcome where the gradient-boosted model **loses** to seasonal-naive, which is a real
-possibility on data with this much weekly structure and would be reported as loudly as a
-win.
+Running any of it on the real Rossmann file. Every figure above is a statement about
+`stockout.data.synth`, and the five questions in [docs/questions.md](docs/questions.md)
+stay unanswered until they can be asked of real data.
+
+After that, in order: fixing the quantile calibration, and giving the simulator a delivery
+pipeline so that absolute costs mean something.
