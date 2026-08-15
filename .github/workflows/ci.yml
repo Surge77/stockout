@@ -30,9 +30,10 @@ jobs:
           cache: pip
 
       - name: Install
-        # Editable, so the tests import the package exactly as a user would. The `gbm`
-        # extra is deliberately NOT installed: the whole suite must stay green without
-        # LightGBM, which is what keeps models/gbm.py an honest stub.
+        # Editable, so the tests import the package exactly as a user would. `dev`
+        # pulls in the `gbm` extra: the gradient-boosted models are real code now, and
+        # code CI cannot execute is code CI cannot measure. The smoke job below installs
+        # the bare package instead, which is what keeps the lazy import honest.
         run: pip install -e ".[dev]"
 
       - name: Lint
