@@ -188,7 +188,7 @@ reports/                generated charts — regenerated, never committed
 ```bash
 ruff check .                                  # lint only; never `ruff format` (ADR 0004)
 pyright                                       # type gate
-pytest --cov --cov-fail-under=90              # 279 passing, 0 skipped, 99% covered
+pytest --cov --cov-fail-under=90              # 283 passing, 0 skipped, 99% covered
 ```
 
 Unit tests never touch the network. A `conftest.py` autouse fixture replaces

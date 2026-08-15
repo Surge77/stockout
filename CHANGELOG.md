@@ -53,7 +53,7 @@ The unbuilt half. Every `NotImplementedError` is gone and every skipped test is 
   test won, and ADR 0008 records what that costs.
 - The first frontier built from an `(R, S)` level held 11.8 days of cover every day and
   returned a fill rate of 1.0000 at every service level. A regression test now pins it.
-- 279 tests, none skipped, 99% coverage.
+- 283 tests, none skipped, 99% coverage.
 
 ## [0.1.0] — 2026-08-14
 
