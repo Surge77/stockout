@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
 import pandas as pd
 
 _DATE_COLUMNS: tuple[str, ...] = ("train_start", "train_end", "test_start", "test_end")
@@ -54,6 +55,14 @@ _FRONTIER_FORMATS: dict[str, str] = {
     "shortage_cost": "{:,.0f}",
     "total_cost": "{:,.0f}",
     "mean_on_hand": "{:,.0f}",
+    "mean_on_order": "{:,.0f}",
+}
+
+_CALIBRATION_FORMATS: dict[str, str] = {
+    "quantile": "{:.2f}",
+    "empirical": "{:.3f}",
+    "gap": "{:+.3f}",
+    "pinball": "{:,.1f}",
 }
 
 
@@ -77,6 +86,42 @@ def frontier_to_markdown(table: pd.DataFrame) -> str:
         [[str(v) for v in row] for row in display.itertuples(index=False)],
     )
     return f"{header}\n\n{body}\n\n{_cheapest_line(table)}\n"
+
+
+def calibration_to_markdown(table: pd.DataFrame, *, model_name: str) -> str:
+    """Nominal against empirical coverage, and the worst miss named outright.
+
+    The single number a reader should leave with is the largest gap, because a frontier
+    built on levels that do not hold prices a policy nobody selected. Naming it is the
+    same discipline as `frontier_to_markdown` naming the cheapest row.
+    """
+    if table.empty:
+        return f"No quantiles were scored for `{model_name}`."
+
+    display = table.copy()
+    for column, fmt in _CALIBRATION_FORMATS.items():
+        if column in display.columns:
+            display[column] = display[column].map(lambda v, f=fmt: f.format(v))
+
+    header = f"### `{model_name}` — coverage against the level it claims"
+    body = _markdown_table(
+        [str(c) for c in display.columns],
+        [[str(v) for v in row] for row in display.itertuples(index=False)],
+    )
+    return f"{header}\n\n{body}\n\n{_worst_miss_line(table)}\n"
+
+
+def _worst_miss_line(table: pd.DataFrame) -> str:
+    """Positional, and signed: under-covering is the direction that costs a sale."""
+    gaps = table["gap"].to_numpy(dtype="float64")
+    worst = int(np.abs(gaps).argmax())
+    quantile = float(table["quantile"].to_numpy(dtype="float64")[worst])
+    empirical = float(table["empirical"].to_numpy(dtype="float64")[worst])
+    direction = "under-covers" if gaps[worst] < 0 else "over-covers"
+    return (
+        f"**Worst miss at quantile {quantile:.2f}** — {direction} by "
+        f"{abs(gaps[worst]):.3f}, delivering {empirical:.1%} of the days it promises."
+    )
 
 
 def _cheapest_line(table: pd.DataFrame) -> str:

@@ -1,0 +1,253 @@
+"""Split-conformal calibration for a quantile forecaster.
+
+**Why this module exists.** `GbmQuantileForecaster` minimises pinball loss and is honest
+about it, but out of sample its nominal 0.9 covers roughly 0.72 of trading days —
+`tests/test_gbm.py::test_out_of_sample_the_quantiles_under_cover` pins that defect on
+purpose. A service level that does not deliver its own number is not a service level, and
+every cost the frontier prices downstream is then the cost of a policy nobody chose. The
+pinball fit is not wrong; it is asked to bracket a spread six weeks ahead that it only
+ever saw one week ahead, and a tree cannot extrapolate variance it was never shown.
+
+**What is done about it.** One additive offset per quantile, learned on a slice of
+training data the boosters never saw, in the geometry they will meet at deployment.
+Distribution-free: no normality, no variance model, no assumption beyond exchangeability
+of the calibration residuals with the test residuals. Recorded in ADR 0009.
+
+**Why the residual is scaled rather than raw.** A pooled offset in currency units
+over-corrects a quiet store and under-corrects a busy one; on the committed sample the
+store means differ by a factor of two, and on Rossmann by far more. Retail error variance
+scales with level — `gbm.py` says so in its own docstring — so the conformity score is
+divided by the model's median prediction for that row before it is pooled. The offset is
+then a relative correction and travels across stores.
+
+**Why two fits.** Split conformal wants the offsets measured on the model that will be
+deployed. The deployed model wants every day of history, and its lag features are built
+by *position*, so a hole punched in its calendar would silently misalign them. Rather
+than trade one for the other, a probe model is fitted on the inner window and scored on
+the calibration window, and the deployed model is fitted on all of it. The probe has seen
+less data, so its errors are no smaller than the deployed model's and the offsets it
+yields are mildly conservative — the safe direction for a service level, and the reason
+this is stated rather than buried. The price is that fitting costs twice as long.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Callable, Sequence
+from typing import Protocol
+
+import numpy as np
+import pandas as pd
+
+from ..data import schemas as s
+from ..errors import BacktestError
+from .base import zero_when_closed
+from .gbm import DEFAULT_NUM_BOOST_ROUND, DEFAULT_QUANTILES, GbmQuantileForecaster
+
+#: Lower bound on the per-row scale the conformity score is divided by, in the currency
+#: units the target is measured in. A shut store predicts zero, and dividing a residual
+#: by zero would put an infinity into a pooled quantile; the floor makes the arithmetic
+#: total without changing any row that carries real demand.
+SCALE_FLOOR = 1.0
+
+
+class QuantileModel(Protocol):
+    """What calibration needs from the model it wraps.
+
+    Narrow on purpose. It exists so the calibration arithmetic can be tested against a
+    two-line stub in milliseconds instead of against six boosters, and because a
+    calibration layer that only works on LightGBM is a calibration layer nobody can
+    check.
+    """
+
+    crossing_rate: float
+
+    @property
+    def quantiles(self) -> tuple[float, ...]: ...
+
+    def fit(self, train: pd.DataFrame) -> QuantileModel: ...
+
+    def predict(self, future: pd.DataFrame) -> pd.Series: ...
+
+    def predict_quantiles(self, future: pd.DataFrame) -> pd.DataFrame: ...
+
+
+class ConformalQuantileForecaster:
+    """A quantile forecaster whose stated levels are made to mean what they say.
+
+    `offsets` and `calibration_rows` are public because a calibration you cannot inspect
+    is a calibration you cannot defend. An offset of +0.31 says the raw 0.9 quantile sat
+    a third of a median below where it needed to be, and that is a fact about the model
+    worth reading rather than a constant to be applied quietly.
+    """
+
+    name = "gbm_conformal"
+
+    def __init__(
+        self,
+        *,
+        horizon: int,
+        quantiles: Sequence[float] = DEFAULT_QUANTILES,
+        params: dict[str, object] | None = None,
+        num_boost_round: int = DEFAULT_NUM_BOOST_ROUND,
+        calibration_days: int | None = None,
+        factory: Callable[[], QuantileModel] | None = None,
+    ) -> None:
+        if horizon < 1:
+            raise ValueError("horizon must be at least 1 day")
+        # One horizon by default, because the calibration window has to be entered from
+        # the same distance the test window is. Residuals gathered one week ahead say
+        # nothing about the spread six weeks ahead, which is the whole defect being fixed.
+        self.calibration_days = horizon if calibration_days is None else calibration_days
+        if self.calibration_days < 1:
+            raise ValueError("the calibration window must be at least 1 day")
+
+        self.horizon = horizon
+        self.offsets: dict[float, float] = {}
+        self.saturated_quantiles: tuple[float, ...] = ()
+        self.calibration_rows = 0
+        self.crossing_rate: float = float("nan")
+
+        self._factory: Callable[[], QuantileModel] = factory or (
+            lambda: GbmQuantileForecaster(
+                horizon=horizon,
+                quantiles=quantiles,
+                params=params,
+                num_boost_round=num_boost_round,
+            )
+        )
+        self._model: QuantileModel | None = None
+
+    @property
+    def quantiles(self) -> tuple[float, ...]:
+        if self._model is None:
+            raise BacktestError("quantiles are known only after fit()")
+        return tuple(self._model.quantiles)
+
+    def fit(self, train: pd.DataFrame) -> ConformalQuantileForecaster:
+        """Learn the offsets on a held-out tail, then fit the model that will be used."""
+        inner, calibration = self._split(train)
+
+        probe = self._factory().fit(inner)
+        predicted = probe.predict_quantiles(calibration)
+        self.offsets = _offsets(
+            predicted=predicted,
+            scale=probe.predict(calibration),
+            frame=calibration,
+        )
+        self.calibration_rows = int((calibration[s.OPEN] == 1).sum())
+        self.saturated_quantiles = tuple(
+            level for level in sorted(self.offsets) if _saturates(self.calibration_rows, level)
+        )
+
+        self._model = self._factory().fit(train)
+        return self
+
+    def predict(self, future: pd.DataFrame) -> pd.Series:
+        """The calibrated median, so this satisfies the same contract as every forecaster."""
+        predicted = self.predict_quantiles(future)
+        median = min(self.quantiles, key=lambda q: abs(q - 0.5))
+        return predicted[str(median)].rename(None)
+
+    def predict_quantiles(self, future: pd.DataFrame) -> pd.DataFrame:
+        """Raw quantiles shifted by their offsets, re-sorted, and zeroed on closures."""
+        if self._model is None:
+            raise BacktestError("predict_quantiles() was called before fit()")
+
+        raw = self._model.predict_quantiles(future)
+        self.crossing_rate = self._model.crossing_rate
+        scale = _scale(self._model.predict(future))
+
+        shifted = {
+            column: zero_when_closed(
+                (raw[column] + self.offsets.get(float(column), 0.0) * scale).clip(lower=0.0),
+                future,
+            )
+            for column in raw.columns
+        }
+        adjusted = pd.DataFrame(shifted, index=raw.index, columns=raw.columns)
+        # Re-sorted because the offsets are learned per quantile and nothing forces them
+        # to be monotone; a 0.8 that overtakes a 0.9 would price a nonsense policy.
+        return pd.DataFrame(
+            np.sort(adjusted.to_numpy(dtype="float64"), axis=1),
+            index=adjusted.index,
+            columns=adjusted.columns,
+        )
+
+    def _split(self, train: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Inner training window and calibration tail, divided by date and never by row.
+
+        Dividing by row would put some of a day's stores on one side and the rest on the
+        other, which is a random split wearing a timestamp.
+        """
+        dates = pd.to_datetime(train[s.DATE])
+        cutoff = pd.Timestamp(dates.max()) - pd.Timedelta(days=self.calibration_days)
+        inner = train[dates <= cutoff]
+        calibration = train[dates > cutoff]
+
+        if inner.empty:
+            raise BacktestError(
+                f"a {self.calibration_days}-day calibration window leaves no training "
+                f"data; the training frame spans {len(dates.unique())} days"
+            )
+        if not bool((calibration[s.OPEN] == 1).any()):
+            raise BacktestError(
+                "the calibration window contains no trading day, so no residual can be "
+                "measured; lengthen it with calibration_days"
+            )
+        return inner, calibration
+
+
+def _offsets(
+    *, predicted: pd.DataFrame, scale: pd.Series, frame: pd.DataFrame
+) -> dict[float, float]:
+    """One conformity correction per quantile column, in units of the scale.
+
+    Closed days are excluded for the reason they are excluded everywhere else: a zero on
+    a shut Sunday is not a demand observation, and a residual of exactly zero repeated
+    across a seventh of the window drags every pooled quantile toward the middle.
+
+    That the window holds at least one trading row is `_split`'s guarantee, checked
+    before either model is fitted rather than after both are.
+    """
+    trading = np.asarray(frame[s.OPEN] == 1)
+    actual = np.asarray(frame[s.SALES], dtype="float64")[trading]
+    divisor = np.asarray(_scale(scale), dtype="float64")[trading]
+
+    return {
+        float(column): _conformal_quantile(
+            (actual - np.asarray(predicted[column], dtype="float64")[trading]) / divisor,
+            float(column),
+        )
+        for column in predicted.columns
+    }
+
+
+def _conformal_quantile(scores: np.ndarray, level: float) -> float:
+    """The `ceil((n + 1) * level) / n` order statistic of `scores`.
+
+    The `n + 1` is the finite-sample correction that makes the coverage guarantee hold
+    for a real calibration set rather than for an infinite one, and `method="higher"`
+    keeps it a guarantee rather than an interpolation between two neighbours. Both are
+    the difference between conformal prediction and taking a percentile of some errors.
+    """
+    n = int(scores.size)
+    corrected = min(math.ceil((n + 1) * level) / n, 1.0)
+    return float(np.quantile(scores, corrected, method="higher"))
+
+
+def _saturates(n: int, level: float) -> bool:
+    """True when the corrected level runs off the end of the residuals there are.
+
+    The correction lands strictly inside the sample only when `ceil((n + 1) * level) < n`,
+    which for a 0.99 first holds at 199 rows and for a 0.9 at 19. Below that the offset is
+    not an estimate of a quantile, it is the worst thing that happened once — a fact about
+    the calibration window rather than about the model. It is reported instead of being
+    smoothed over, because a service level resting on a single observation should say so.
+    """
+    return n < 1 or math.ceil((n + 1) * level) / n >= 1.0
+
+
+def _scale(reference: pd.Series) -> pd.Series:
+    """Per-row divisor for the conformity score: the median prediction, floored."""
+    return reference.clip(lower=SCALE_FLOOR)

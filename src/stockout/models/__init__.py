@@ -1,4 +1,4 @@
-"""Forecasters: three baselines, and the gradient-boosted point and quantile models.
+"""Forecasters: three baselines, the gradient-boosted models, and the calibrated one.
 
 The baselines import cleanly on a bare install. The gradient-boosted models construct on
 one too — LightGBM is imported inside `fit`, so listing a model is never the same thing
@@ -13,6 +13,7 @@ from functools import partial
 from typing import Any
 
 from .baselines import BASELINES
+from .conformal import ConformalQuantileForecaster
 from .gbm import GbmForecaster, GbmQuantileForecaster
 
 #: Models that must be told the horizon they are forecasting at, because their features
@@ -21,6 +22,7 @@ from .gbm import GbmForecaster, GbmQuantileForecaster
 _HORIZON_AWARE: dict[str, type] = {
     GbmForecaster.name: GbmForecaster,
     GbmQuantileForecaster.name: GbmQuantileForecaster,
+    ConformalQuantileForecaster.name: ConformalQuantileForecaster,
 }
 
 #: Every name the CLI accepts. Sorted so `--help` does not reorder between runs.

@@ -100,3 +100,37 @@ def test_an_unpriced_frontier_says_so_rather_than_rendering_an_empty_table() -> 
     from stockout.evaluate.report import frontier_to_markdown
 
     assert "No service levels" in frontier_to_markdown(pd.DataFrame())
+
+
+def test_the_calibration_table_names_the_worst_miss_and_its_direction() -> None:
+    """A table of gaps that leaves the reader to find the largest is a chart, not a claim."""
+    from stockout.evaluate.report import calibration_to_markdown
+
+    table = pd.DataFrame(
+        {
+            "quantile": [0.5, 0.9],
+            "empirical": [0.52, 0.72],
+            "gap": [0.02, -0.18],
+            "pinball": [120.0, 80.0],
+        }
+    )
+    out = calibration_to_markdown(table, model_name="gbm_quantile")
+
+    assert "Worst miss at quantile 0.90" in out
+    assert "under-covers by 0.180" in out
+    assert "72.0% of the days it promises" in out
+
+
+def test_a_calibration_table_reports_over_covering_as_over_covering() -> None:
+    from stockout.evaluate.report import calibration_to_markdown
+
+    table = pd.DataFrame(
+        {"quantile": [0.5], "empirical": [0.9], "gap": [0.4], "pinball": [10.0]}
+    )
+    assert "over-covers by 0.400" in calibration_to_markdown(table, model_name="stub")
+
+
+def test_an_unscored_model_says_so_rather_than_rendering_an_empty_table() -> None:
+    from stockout.evaluate.report import calibration_to_markdown
+
+    assert "No quantiles" in calibration_to_markdown(pd.DataFrame(), model_name="stub")
