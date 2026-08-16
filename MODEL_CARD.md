@@ -1,6 +1,6 @@
 # Model card — stockout
 
-**Status: five forecasters, evaluated on synthetic data only.** Every number below comes
+**Status: six forecasters, evaluated on synthetic data only.** Every number below comes
 from a generator, not from retail, and is stated that way wherever it appears.
 
 ## What exists
@@ -13,16 +13,19 @@ Three baselines, all fitted per store on trading days only.
 | `seasonal_naive` | Most recent same store, same weekday | `season_length = 7` |
 | `moving_average` | Mean of the last `window` trading days | `window = 28` |
 
-Two gradient-boosted models, fitted on the horizon-aware feature matrix.
+Three gradient-boosted models, fitted on the horizon-aware feature matrix.
 
 | Model | Objective | Parameters |
 |---|---|---|
 | `gbm` | `tweedie`, variance power 1.2 | 800 rounds, lr 0.05, 63 leaves, min 100 per leaf |
 | `gbm_quantile` | `quantile` at each of 6 alphas | one booster per quantile, same tree settings |
+| `gbm_conformal` | `gbm_quantile` plus a per-level offset | offsets from a 42-day held-out tail, scaled by the median prediction |
 
 Tweedie because sales are non-negative with a point mass at zero. Quantiles rather than a
 mean plus `z * sigma`, because retail errors are neither symmetric nor constant-variance —
-[ADR 0007](docs/decisions/0007-quantiles-not-point-forecast-plus-z-score.md).
+[ADR 0007](docs/decisions/0007-quantiles-not-point-forecast-plus-z-score.md). Conformal
+offsets on top of those quantiles because, measured, the stated levels did not hold —
+[ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md).
 
 Features are calendar covariates that are knowable in advance, plus lags and rolling
 statistics that are all at least one horizon old. `customers` is excluded by a denylist
@@ -67,22 +70,34 @@ On the synthetic sample:
 generator's promotion calendar and weekday pattern are deterministic, so a model with
 calendar features has an advantage here that it would have to re-earn on Rossmann.
 
-Quantile calibration is measured, not assumed, and it is the weakest result in the repo.
-Out of sample on the newest fold, every level under-covers:
+Quantile calibration is measured, not assumed, and it remains the weakest result in the
+repo. Out of sample on the newest fold, every level under-covers, and calibration closes
+about half of every gap:
 
 | Nominal | 0.50 | 0.75 | 0.80 | 0.90 | 0.95 | 0.99 |
 |---|---|---|---|---|---|---|
-| Covered (trading days) | 0.357 | 0.564 | 0.607 | 0.721 | 0.843 | 0.893 |
+| `gbm_quantile` covers | 0.357 | 0.564 | 0.607 | 0.721 | 0.843 | 0.893 |
+| `gbm_conformal` covers | 0.414 | 0.650 | 0.693 | 0.779 | 0.886 | 0.929 |
+
+Pinball loss improves at every level as well (350.8 → 337.2 at the median, 74.4 → 42.3 at
+the 0.99), so the coverage is not bought by degrading the forecast. Reproduce with
+`python -m stockout calibration`.
 
 Quantile crossing affected 42.9% of rows and was sorted before use.
 
 ## Limitations
 
-- **The quantile models are not calibrated out of sample.** A nominal 0.9 covers about
-  0.72 of trading days on held-out data. Stocking to a stated service level therefore does
-  not deliver it, and the cost-minimising level on the sample lands at 0.90 rather than at
-  the 0.75 the cost pair derives. Reported rather than corrected, because a post-hoc
-  calibration shift would hide the fact that it happened.
+- **Even calibrated, the quantiles under-cover.** A nominal 0.9 covers 0.721 raw and 0.779
+  after conformal correction. Calibration moved the cost-minimising level from 0.90 to
+  0.80 — towards the 0.75 the cost pair derives, which is what ADR 0007 predicted — but did
+  not close the distance. The remainder is distribution shift between the calibration
+  window and the test window that follows it.
+- **Calibration is conditional on having enough rows, and can hurt without them.** On a
+  two-store draw with 70 calibration rows, both the worst coverage gap and the pinball loss
+  got worse. `calibration_rows` and `saturated_quantiles` are public and printed; no
+  threshold is enforced, because one picked from four draws would be a guess.
+- **Coverage is corrected marginally, not conditionally.** A single store or a single
+  season can still be badly covered without this layer noticing.
 - **Pooled by default, structured not at all.** The baselines fit per store. The
   gradient-boosted models are a single global fit with `store` as a feature, so they pool
   incidentally rather than by design — no hierarchy, no per-store effects, no shrinkage
@@ -91,9 +106,13 @@ Quantile crossing affected 42.9% of rows and was sorted before use.
   per store-weekday) for all 42 days. It cannot represent a trend or an approaching event.
 - **Promotions are ignored** by all three baselines, despite `promo` being available and
   future-known. The gradient-boosted models do use them.
-- **The simulator has no delivery pipeline.** It prices a repeated single-period
-  newsvendor, so its absolute currency figures are an ordering of options and not a
-  budget — [ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md).
+- **The delivery pipeline is opt-in and its stock in transit is free.** By default the
+  simulator prices a repeated single-period newsvendor
+  ([ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md)); `--lead-time`
+  opens a real pipeline, but nothing is charged for goods on a lorry, so the model prefers
+  a long pipeline to a full shelf in a way a financed business would not. Under a lead time
+  the cost-minimising service level is no longer the critical ratio at all —
+  [ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).
 - **Synthetic evaluation only**, so far.
 
 ## Ethical and practical considerations
@@ -113,5 +132,7 @@ Running any of it on the real Rossmann file. Every figure above is a statement a
 `stockout.data.synth`, and the five questions in [docs/questions.md](docs/questions.md)
 stay unanswered until they can be asked of real data.
 
-After that, in order: fixing the quantile calibration, and giving the simulator a delivery
-pipeline so that absolute costs mean something.
+Both of the follow-ups this card used to list have been done — the quantiles are calibrated
+and the simulator has a pipeline — and both turned out to be half-fixes with their
+remainders written down. What is left, in order: conditional rather than marginal coverage,
+and a carrying charge on stock in transit.

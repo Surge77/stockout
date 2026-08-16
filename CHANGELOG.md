@@ -8,8 +8,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Planned
 
 - Answers to the five questions in `docs/questions.md`, which need the real Rossmann file
-- Calibration of the quantile models, whose out-of-sample coverage is measurably short
-- A delivery pipeline in `inventory/simulate.py`, so that absolute costs mean something
+  and nothing else — every cell that produces them now runs
+- Conditional coverage. ADR 0009's guarantee is marginal, so a single store or a single
+  December can still be badly covered and the calibration will not notice
+- A charge on stock in transit, which ADR 0010 currently gives away free
+
+## [0.3.0] — 2026-08-16
+
+The two defects the last release wrote down, fixed — one of them only halfway, and the
+number that says so is in the release notes rather than under it.
+
+### Added
+
+- **Calibration** — `ConformalQuantileForecaster` (`--model gbm_conformal`), split
+  conformal with a scaled conformity score, a probe model fitted on the inner window and
+  a deployed model fitted on all of it. `offsets`, `calibration_rows` and
+  `saturated_quantiles` are public, because a correction nobody can inspect is a
+  correction nobody can defend. ADR 0009.
+- **`stockout calibration`** — nominal against empirical coverage for the raw and the
+  calibrated model side by side, plus pinball loss per level and a warning naming any
+  level whose offset rests on a single observation.
+- **Delivery pipeline** — `simulate(..., lead_time_days=...)`. Orders are placed against
+  the inventory position, arrive `L` days later, and are visible in the new
+  `mean_on_order`. `frontier` re-sizes across the protection interval and opens in steady
+  state when a lead time is set, because the two halves have to move together. ADR 0010.
+- **`metrics.coverage_table`** and **`report.calibration_to_markdown`**, promoted out of
+  the notebook cell that had been computing coverage by hand.
+
+### Changed
+
+- `notebooks/01_explore.ipynb` executes end to end. Q3 and Q4 were hints and are now
+  cells; Q5 prices three policies rather than one; the calibration cell calls the package.
+- ADR 0008 carries a pointer to ADR 0010. Nothing in it is retracted — the trap it
+  documents is still a trap, which is why the pipeline and the re-sizing shipped together.
+
+### Notes
+
+- **Calibration moves the cost-minimising service level from 0.90 to 0.80** and cuts the
+  fold's total cost from 44,271 to 43,456. ADR 0007 predicted the optimum should sit at
+  the 0.75 the cost pair derives; the raw model put it at 0.90; fixing the coverage moved
+  it towards the prediction. Pinball loss improves at every level too.
+- **It is a half-fix.** A nominal 0.9 covered 0.721 and now covers 0.779. The rest is
+  distribution shift between the calibration window and the test window that follows it.
+- **The number that disagrees.** On a two-store draw with 70 calibration rows, calibration
+  is worse than no calibration — worst gap 0.107 → 0.171, pinball 188.9 → 195.6. It helps
+  at 105, 140 and 175 rows. No threshold is enforced; the row count is printed instead.
+- **A seven-day lead time collapses the cheapest level to 0.50** and multiplies cost
+  sixfold. Holding is charged every day of the protection interval and shortage once, so
+  `Cu / (Cu + Co)` stops being the right target the moment that interval exceeds a day.
+- Q4's original design divides by an empty set on any calendar that promotes every other
+  week. Rewritten as a days-since-promotion profile. Found by running the cell, which had
+  never been run.
+- 326 tests, none skipped, 98% coverage.
 
 ## [0.2.0] — 2026-08-15
 
@@ -90,6 +140,7 @@ First scaffold. The spine runs end to end; the learned models do not exist yet.
 - Stubs (`models/gbm.py`, `inventory/`) carry their reasoning and their skipped tests, so
   the specification is on record before the implementation.
 
-[Unreleased]: https://github.com/Surge77/stockout/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Surge77/stockout/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Surge77/stockout/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Surge77/stockout/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Surge77/stockout/releases/tag/v0.1.0

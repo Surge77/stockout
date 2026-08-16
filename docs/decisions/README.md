@@ -12,4 +12,6 @@ downside listed is usually one that was not thought about hard enough.
 | [0005](0005-wmape-and-mase-not-mape.md) | WMAPE and MASE; MAPE excluded | Not directly comparable to work that quotes MAPE |
 | [0006](0006-analysis-in-notebooks.md) | Analysis in notebooks, plumbing in the package | Notebook code is untested and reviewed by eye |
 | [0007](0007-quantiles-not-point-forecast-plus-z-score.md) | Forecast quantiles directly | Five models instead of one, and quantile crossing to handle |
-| [0008](0008-the-simulator-has-no-shipping-lag.md) | The simulator prices a repeated newsvendor, not an (R, S) system | No pipeline, so no bullwhip; absolute costs are an ordering, not a budget |
+| [0008](0008-the-simulator-has-no-shipping-lag.md) | The simulator prices a repeated newsvendor, not an (R, S) system | No pipeline, so no bullwhip; absolute costs are an ordering, not a budget — *extended by 0010* |
+| [0009](0009-conformal-calibration-not-a-recalibrated-loss.md) | Calibrate the quantiles conformally; leave the raw model alone | Twice the fitting time, coverage corrected only on average, and worse than nothing below ~100 calibration rows |
+| [0010](0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md) | The delivery pipeline is opt-in, and off by default | Two systems behind one function; stock in transit is free; the critical ratio stops being the right target |

@@ -1,5 +1,10 @@
 # 0008 — The simulator prices a repeated newsvendor, not an (R, S) system
 
+> **Extended by [ADR 0010](0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).**
+> `simulate` now takes a `lead_time_days`, and everything below describes what it does at
+> the default of `0`. Nothing here is retracted: the trap this ADR documents is still a
+> trap, and 0010 exists because the two halves of the fix had to ship together.
+
 ## Situation
 
 An order-up-to system can put the lead time in either of two places.

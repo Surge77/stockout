@@ -21,6 +21,10 @@ data/raw/train.csv          data.synth.make_sales
                       v
               evaluate.report.to_markdown   a table, and a verdict line
                       v
+              models.conformal              offsets so a stated level is the achieved one
+                      v
+              evaluate.metrics.coverage_table   nominal against empirical, per level
+                      v
               inventory.policy              critical ratio -> the quantile to stock to
                       v
               inventory.simulate.frontier   cost and fill rate per service level
@@ -31,6 +35,11 @@ data/raw/train.csv          data.synth.make_sales
 The second half of that chain is what makes the project an argument rather than a score.
 `backtest` answers "how wrong is the forecast"; `frontier` answers "what does being that
 wrong cost", and those two questions order the models differently.
+
+The calibration step sits between them because it is the join. `frontier` prices a
+*service level*, and a service level the model does not actually deliver prices a policy
+nobody chose — so coverage has to be measured before any cost table is believed. On the
+committed sample, correcting it moves the cheapest level by a whole grid step.
 
 ## The three guards
 
@@ -67,7 +76,7 @@ exhaustively with no fixtures beyond a generated frame.
 src/stockout/
 ├── config.py          paths, horizons, the newsvendor cost pair, env knobs
 ├── errors.py          StockoutError and its four children
-├── cli.py             fetch | synth | describe | backtest
+├── cli.py             fetch | synth | describe | backtest | calibration | frontier
 ├── plots.py           figure styling and saving; no chart builders
 ├── data/
 │   ├── download.py    Kaggle fetch; the only network call in the package
@@ -84,14 +93,15 @@ src/stockout/
 │   ├── base.py        Forecaster protocol; zero_when_closed; open_rows
 │   ├── baselines.py   naive_last, seasonal_naive, moving_average
 │   ├── gbm.py         point (tweedie) and quantile; LightGBM imported inside fit()
+│   ├── conformal.py   split-conformal offsets; a probe fit and a deployed fit
 │   └── __init__.py    the name -> factory registry the CLI's --model reads
 ├── evaluate/
-│   ├── metrics.py     WMAPE, MASE, RMSPE, pinball, coverage. No MAPE
+│   ├── metrics.py     WMAPE, MASE, RMSPE, pinball, coverage, coverage_table. No MAPE
 │   ├── backtest.py    the rolling-origin loop; fresh model per fold
-│   └── report.py      markdown table + a verdict that names the loser
+│   └── report.py      markdown tables + verdicts that name the loser and the worst miss
 └── inventory/
     ├── policy.py      critical_ratio, the base-stock level, the order it implies
-    └── simulate.py    fill rate, holding and shortage cost, the efficient frontier
+    └── simulate.py    the day-by-day walk, the delivery pipeline, the efficient frontier
 ```
 
 Every file is under the 300-line limit. `evaluate/metrics.py` and `features/lags.py` are
