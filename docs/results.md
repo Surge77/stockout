@@ -188,16 +188,26 @@ alternates weekly, so same-weekday-last-week always lands on the opposite promot
 at h=7, and lands on the same one at h=14 and h=28. The cell is fine; the data is a
 metronome.
 
-**Q4's profile is flat**, at 0.999 on the first day after a promotion and 1.000 thereafter.
-That is the correct answer for a generator that applies a constant promotion multiplier
-and models no payback at all, and it is the cell's own unit test: a synthetic lift far from
-zero would have meant the weekday matching was broken rather than that promotions pull
-demand forward.
+**Q4 is not estimable on this calendar, and saying so took two attempts.** The first
+rewrite produced a reassuringly flat profile — 0.999 on the first day after a promotion,
+1.000 thereafter — which looked like the correct null result for a generator with no
+payback period. It was an artefact. The weekday reference was built from every
+non-promotion day, and on a calendar that promotes every other week *every* non-promotion
+day is inside some promotion's wake, so the denominator contained the effect the numerator
+was measuring and the ratio was 1 by construction. Excluding the wake from the reference
+leaves 1,401 wake days with nothing clean to compare against and zero estimable
+store-weekdays, and the cell now prints `PROFILE NOT ESTIMABLE` instead of a number.
 
-**Q3's concentration is mild** — the worst 5% of test days carry 15.5% of the absolute
-error, the worst 10% carry 26.2%, the worst 20% carry 44.3%. Against a perfectly even
-5/10/20 that is concentration, but nothing like the hockey stick real holiday trading
-would produce.
+That is the more useful result: Q4 needs promotion *sparsity*, not merely promotion data,
+and a flat line would have been reported as a finding by anyone who did not check what the
+baseline was made of.
+
+**Q3's concentration is mild** — the worst 5% of test store-days carry 15.5% of the
+absolute error, the worst 10% carry 26.2%, the worst 20% carry 44.3%. The unit is the
+store-day, which is what `questions.md` asked for ("rank test-set rows") and what a
+stocking decision is made in; two stores having a bad Tuesday are two problems. Against a
+perfectly even 5/10/20 that is concentration, but nothing like the hockey stick real
+holiday trading would produce.
 
 **Q5's three policies, on synthetic data, rank the wrong way round.** Pricing
 `mean + z·sigma`, the raw quantile and the calibrated quantile at the same derived 0.75
@@ -238,9 +248,9 @@ are drawn from one distribution, and four stores cannot populate four quartiles.
 
 ## Q3 — Concentration of error across days
 
-*Unanswered.* Cell `q3-code` ranks test rows by absolute error, plots the cumulative
-share against a diagonal, and prints the ten worst days with their promotion and holiday
-flags so an answer can say *which* days rather than only how few.
+*Unanswered.* Cell `q3-code` ranks test rows — store-days — by absolute error, plots the
+cumulative share against a diagonal, and prints the ten worst with their promotion and
+holiday flags so an answer can say *which* rather than only how few.
 
 **Number:**
 **Evidence:**
@@ -252,12 +262,18 @@ flags so an answer can say *which* days rather than only how few.
 constant multiplier with no payback period — so the null result it produces measures the
 generator and nothing else.
 
-Cell `q4-code` had to be rewritten to work at all. The obvious design — compare days in
-the wake of a promotion against days that are not — divides by an empty set on any
-calendar that promotes every other week, because then every non-promotion day is in some
-promotion's wake. It measures the profile against days-since-promotion instead, with each
-store's weekday cycle divided out first. That is a real constraint on the question and it
-would have gone unnoticed until the Rossmann file landed.
+Cell `q4-code` had to be rewritten twice. The obvious design — compare days in the wake of
+a promotion against days that are not — divides by an empty set on any calendar that
+promotes every other week, because then every non-promotion day is in some promotion's
+wake. The second design measured a profile against days-since-promotion with each store's
+weekday cycle divided out, and quietly reintroduced the same fault in the denominator: the
+weekday reference was built from all non-promotion days, wake days included, so it
+contained the effect being measured. The third excludes the wake from the reference,
+reports how many wake days have nothing clean left to compare against, and refuses to
+print a profile when that number is all of them.
+
+That is a real constraint on the question — it needs promotion sparsity, not just
+promotion data — and it would have gone unnoticed until the Rossmann file landed.
 
 **Number:**
 **Evidence:**

@@ -40,9 +40,19 @@ each quantile by what they say.
 ## Decision
 
 `models/conformal.py::ConformalQuantileForecaster` wraps a quantile forecaster and adds
-one offset per level, learned by split conformal prediction on a held-out tail of the
-training window. Distribution-free: no normality, no variance model, nothing assumed
-beyond the calibration residuals being exchangeable with the test residuals.
+one offset per level, computed as a conformal order statistic of the residuals on a
+held-out tail of the training window. It fits no distribution: no normality, no variance
+model, nothing taken from the residuals but an order statistic of them.
+
+**It does not carry the split-conformal guarantee, and must not be described as though it
+does.** That theorem covers the model whose residuals were measured. The model deployed
+here is refitted on more data — see *two models are fitted* below — so the residuals and
+the predictions come from different estimators, exchangeability fails, and the marginal
+coverage statement stops being proven. What remains is a heuristic calibration with a
+directional argument behind it and an empirical result in front of it. Every coverage
+figure in this repository is measured on held-out data and printed by
+`stockout calibration`; none of them is a guarantee, and the one table below where the
+method makes things worse is the reason that distinction is worth keeping.
 
 Four choices inside it are not obvious and are therefore recorded.
 
@@ -58,11 +68,24 @@ correction and travels across stores. This is the same heteroscedasticity ADR 00
 as the reason not to use `z * sigma`, and it would be strange to invoke it there and
 ignore it here.
 
-**Two models are fitted, not one.** Split conformal wants the offsets measured on the
-model that gets deployed; the deployed model wants every day of history, and its lag
-features are built by *position*, so a hole punched in its calendar would misalign them
-silently. Rather than trade one for the other, a probe model is fitted on the inner window
-and scored on the calibration tail, and the deployed model is fitted on all of it.
+**Two models are fitted, not one — and this is what costs the guarantee.** Split conformal
+wants the offsets measured on the model that gets deployed; the deployed model wants every
+day of history, and its lag features are built by *position*, so a hole punched in its
+calendar would misalign them silently. Rather than trade one for the other, a probe model
+is fitted on the inner window and scored on the calibration tail, and the deployed model is
+fitted on all of it.
+
+The alternative — serving predictions from the probe — would keep the theorem intact and
+reintroduce the misalignment the two-fit design exists to avoid: the probe's retained
+history stops 42 days before the test window, and a positional lag reaching across that
+hole lands on the wrong date. A silently wrong feature is worse than an unproven bound, so
+the bound is the thing given up, and it is given up in writing rather than by omission.
+
+The direction of the resulting error is arguable but not provable. The probe trains on
+less data, so its residuals should be no smaller than the deployed model's and the offsets
+it yields should if anything over-correct — which is the safe direction for a service
+level. "Should" is doing real work in that sentence, and the measured coverage below is
+what the decision actually rests on.
 
 **The raw model stays exactly as it was.** `GbmQuantileForecaster` is a faithful pinball
 fit and its under-coverage is a true fact about pinball fits at long horizons.
@@ -87,7 +110,7 @@ the 0.99 — so this is not coverage bought by making the forecast worse.
 **Fitting takes twice as long**, because the probe is a full set of boosters that is then
 thrown away. On the committed sample that is seconds; on Rossmann it is not nothing.
 
-**The guarantee is marginal, not conditional.** Coverage is corrected on average across
+**The correction is marginal, not conditional.** Coverage is corrected on average across
 the pooled rows. A particular store, or December, can still be badly covered, and this
 layer will not notice. Conditional coverage needs either per-group calibration — which
 runs straight into the row counts below — or a Mondrian scheme, and neither is here.

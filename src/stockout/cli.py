@@ -258,6 +258,14 @@ def _calibration(args: argparse.Namespace) -> int:
     trading = test[s.OPEN] == 1
     actual = test.loc[trading, s.SALES]
 
+    # Checked before either model is fitted. A window of nothing but closures scores every
+    # level NaN, and a coverage table of NaN reads as a result rather than as an absence.
+    if not bool(trading.any()):
+        raise BacktestError(
+            f"the test window {fold.test_start.date()} to {fold.test_end.date()} contains "
+            "no trading day, so no coverage can be measured"
+        )
+
     raw = GbmQuantileForecaster(horizon=args.horizon).fit(train)
     calibrated = ConformalQuantileForecaster(horizon=args.horizon).fit(train)
 

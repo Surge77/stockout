@@ -134,3 +134,36 @@ def test_an_unscored_model_says_so_rather_than_rendering_an_empty_table() -> Non
     from stockout.evaluate.report import calibration_to_markdown
 
     assert "No quantiles" in calibration_to_markdown(pd.DataFrame(), model_name="stub")
+
+
+def test_a_nan_gap_is_not_mistaken_for_the_worst_one() -> None:
+    """`argmax` over an array holding NaN still returns an index, and would name it.
+
+    A column label that is not a quantile scores NaN. Reporting that as the worst miss
+    would announce a coverage failure of `nan` in the over-covering direction.
+    """
+    from stockout.evaluate.report import calibration_to_markdown
+
+    table = pd.DataFrame(
+        {
+            "quantile": [0.9, float("nan")],
+            "empirical": [0.85, 1.0],
+            "gap": [-0.05, float("nan")],
+            "pinball": [10.0, float("nan")],
+        }
+    )
+    assert "Worst miss at quantile 0.90" in calibration_to_markdown(table, model_name="stub")
+
+
+def test_a_table_with_no_finite_gap_reports_that_rather_than_naming_a_level() -> None:
+    from stockout.evaluate.report import calibration_to_markdown
+
+    table = pd.DataFrame(
+        {
+            "quantile": [float("nan")],
+            "empirical": [float("nan")],
+            "gap": [float("nan")],
+            "pinball": [float("nan")],
+        }
+    )
+    assert "No level could be scored" in calibration_to_markdown(table, model_name="stub")

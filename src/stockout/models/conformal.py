@@ -1,4 +1,4 @@
-"""Split-conformal calibration for a quantile forecaster.
+"""Conformal-style calibration for a quantile forecaster.
 
 **Why this module exists.** `GbmQuantileForecaster` minimises pinball loss and is honest
 about it, but out of sample its nominal 0.9 covers roughly 0.72 of trading days —
@@ -9,9 +9,16 @@ pinball fit is not wrong; it is asked to bracket a spread six weeks ahead that i
 ever saw one week ahead, and a tree cannot extrapolate variance it was never shown.
 
 **What is done about it.** One additive offset per quantile, learned on a slice of
-training data the boosters never saw, in the geometry they will meet at deployment.
-Distribution-free: no normality, no variance model, no assumption beyond exchangeability
-of the calibration residuals with the test residuals. Recorded in ADR 0009.
+training data the boosters never saw, in the geometry they will meet at deployment. It
+fits no distribution: no normality, no variance model, nothing taken from the residuals
+but an order statistic of them.
+
+**What it is not, and this matters.** Textbook split conformal proves marginal coverage
+for *the model that produced the residuals*. The model deployed here is not that model —
+see "why two fits" below — so the proof does not transfer and nothing in this module
+carries it. The claim is narrower and is measured rather than proven: the correction moves
+out-of-sample coverage substantially towards the stated level, `stockout calibration`
+prints the number, and ADR 0009 records the draw where it moves the wrong way.
 
 **Why the residual is scaled rather than raw.** A pooled offset in currency units
 over-corrects a quiet store and under-corrects a busy one; on the committed sample the
@@ -20,14 +27,23 @@ scales with level — `gbm.py` says so in its own docstring — so the conformit
 divided by the model's median prediction for that row before it is pooled. The offset is
 then a relative correction and travels across stores.
 
-**Why two fits.** Split conformal wants the offsets measured on the model that will be
-deployed. The deployed model wants every day of history, and its lag features are built
-by *position*, so a hole punched in its calendar would silently misalign them. Rather
-than trade one for the other, a probe model is fitted on the inner window and scored on
-the calibration window, and the deployed model is fitted on all of it. The probe has seen
-less data, so its errors are no smaller than the deployed model's and the offsets it
-yields are mildly conservative — the safe direction for a service level, and the reason
-this is stated rather than buried. The price is that fitting costs twice as long.
+**Why two fits, and what it costs.** Split conformal wants the offsets measured on the
+model that will be deployed. The deployed model wants every day of history, and its lag
+features are built by *position*, so a hole punched in its calendar would silently
+misalign them. Rather than trade one for the other, a probe model is fitted on the inner
+window and scored on the calibration window, and the deployed model is fitted on all of
+it.
+
+This is the refit that costs the guarantee. The residuals describe the probe, the
+predictions come from the deployed model, and the two are not exchangeable, so the
+coverage statement becomes an expectation rather than a theorem. The direction of the
+error is at least arguable: the probe has seen less data, so its residuals are no smaller
+than the deployed model's and the offsets it yields should if anything over-correct. That
+is an argument, not a proof, and the measured coverage is what the claim rests on.
+
+Serving predictions from the probe instead would restore the theorem and break the lag
+alignment it exists to protect, which is a worse trade. Fitting costs twice as long either
+way.
 """
 
 from __future__ import annotations
@@ -226,10 +242,12 @@ def _offsets(
 def _conformal_quantile(scores: np.ndarray, level: float) -> float:
     """The `ceil((n + 1) * level) / n` order statistic of `scores`.
 
-    The `n + 1` is the finite-sample correction that makes the coverage guarantee hold
-    for a real calibration set rather than for an infinite one, and `method="higher"`
-    keeps it a guarantee rather than an interpolation between two neighbours. Both are
-    the difference between conformal prediction and taking a percentile of some errors.
+    The `n + 1` is the finite-sample correction that would make the coverage statement
+    hold for a calibration set of this size rather than for an infinite one, and
+    `method="higher"` rounds towards more coverage rather than interpolating between two
+    neighbours. Both are kept because they are the right arithmetic and both err towards
+    covering; neither survives as a proof once the deployed model is refitted, which the
+    module docstring says out loud.
     """
     n = int(scores.size)
     corrected = min(math.ceil((n + 1) * level) / n, 1.0)

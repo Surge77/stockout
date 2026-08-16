@@ -9,8 +9,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 - Answers to the five questions in `docs/questions.md`, which need the real Rossmann file
   and nothing else — every cell that produces them now runs
-- Conditional coverage. ADR 0009's guarantee is marginal, so a single store or a single
+- Conditional coverage. ADR 0009 corrects on average, so a single store or a single
   December can still be badly covered and the calibration will not notice
+- A calibration whose coverage statement is provable rather than measured. The two-fit
+  design trades the split-conformal theorem for correct lag alignment, and says so
 - A charge on stock in transit, which ADR 0010 currently gives away free
 
 ## [0.3.0] — 2026-08-16
@@ -20,9 +22,11 @@ number that says so is in the release notes rather than under it.
 
 ### Added
 
-- **Calibration** — `ConformalQuantileForecaster` (`--model gbm_conformal`), split
-  conformal with a scaled conformity score, a probe model fitted on the inner window and
-  a deployed model fitted on all of it. `offsets`, `calibration_rows` and
+- **Calibration** — `ConformalQuantileForecaster` (`--model gbm_conformal`), conformal
+  arithmetic with a scaled conformity score, a probe model fitted on the inner window and
+  a deployed model fitted on all of it. That refit gives up the split-conformal theorem in
+  exchange for correct lag alignment, so the coverage claim is measured rather than
+  proven, and ADR 0009 says so in its own words. `offsets`, `calibration_rows` and
   `saturated_quantiles` are public, because a correction nobody can inspect is a
   correction nobody can defend. ADR 0009.
 - **`stockout calibration`** — nominal against empirical coverage for the raw and the
@@ -57,9 +61,12 @@ number that says so is in the release notes rather than under it.
   sixfold. Holding is charged every day of the protection interval and shortage once, so
   `Cu / (Cu + Co)` stops being the right target the moment that interval exceeds a day.
 - Q4's original design divides by an empty set on any calendar that promotes every other
-  week. Rewritten as a days-since-promotion profile. Found by running the cell, which had
-  never been run.
-- 326 tests, none skipped, 98% coverage.
+  week, and its replacement put the same fault in the denominator — a weekday reference
+  built from every non-promotion day contains the wake it is meant to measure, and returns
+  a lift of 1.000 whatever is true. The third version excludes the wake from the reference
+  and prints `PROFILE NOT ESTIMABLE` on this sample rather than a reassuring flat line.
+  Q4 needs promotion sparsity, not just promotion data.
+- 328 tests, none skipped, 98% coverage.
 
 ## [0.2.0] — 2026-08-15
 

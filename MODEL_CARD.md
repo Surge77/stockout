@@ -98,6 +98,10 @@ Quantile crossing affected 42.9% of rows and was sorted before use.
   threshold is enforced, because one picked from four draws would be a guess.
 - **Coverage is corrected marginally, not conditionally.** A single store or a single
   season can still be badly covered without this layer noticing.
+- **The coverage claim is measured, not guaranteed.** Split conformal proves marginal
+  coverage for the estimator whose residuals were used; the deployed model is refitted on
+  more data, so the theorem does not transfer. Every figure quoted here is an
+  out-of-sample measurement — [ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md).
 - **Pooled by default, structured not at all.** The baselines fit per store. The
   gradient-boosted models are a single global fit with `store` as a feature, so they pool
   incidentally rather than by design — no hierarchy, no per-store effects, no shrinkage

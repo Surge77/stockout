@@ -114,11 +114,21 @@ def test_the_coverage_table_signs_the_gap_so_the_dangerous_direction_reads_negat
 
 
 def test_the_coverage_table_prices_each_level_with_its_own_pinball_loss() -> None:
-    """The loss the level was fitted under, so calibration can be judged against accuracy."""
+    """The loss the level was fitted under, so calibration can be judged against accuracy.
+
+    Two columns holding the *same* forecast, so the only thing that can separate their
+    losses is the tau each is scored at. A perfect forecast would score zero at every
+    level and the assertion would pass even if the column label were ignored entirely —
+    which is the bug this test exists to catch.
+    """
     import pandas as pd
 
-    table = metrics.coverage_table([10.0] * 4, pd.DataFrame({"0.9": [10.0] * 4}))
-    assert table.loc[0, "pinball"] == pytest.approx(0.0)
+    # Under-forecast by 10 everywhere. Pinball at tau is then tau * 10.
+    predicted = pd.DataFrame({"0.9": [90.0] * 4, "0.5": [90.0] * 4})
+    table = metrics.coverage_table([100.0] * 4, predicted)
+
+    assert table.loc[0, "pinball"] == pytest.approx(9.0)
+    assert table.loc[1, "pinball"] == pytest.approx(5.0)
 
 
 def test_a_column_that_is_not_a_quantile_scores_nan_rather_than_crashing_a_report() -> None:

@@ -112,9 +112,20 @@ def calibration_to_markdown(table: pd.DataFrame, *, model_name: str) -> str:
 
 
 def _worst_miss_line(table: pd.DataFrame) -> str:
-    """Positional, and signed: under-covering is the direction that costs a sale."""
+    """Positional, and signed: under-covering is the direction that costs a sale.
+
+    A NaN gap is not a small gap. `coverage_table` produces one for a column whose label
+    is not a quantile, and for a scoring window with no rows in it; `argmax` over an array
+    containing NaN still returns an index, and the line would then announce a miss of
+    `nan` as over-coverage. Non-finite rows are dropped, and a table with nothing finite
+    left says so rather than naming one.
+    """
     gaps = table["gap"].to_numpy(dtype="float64")
-    worst = int(np.abs(gaps).argmax())
+    finite = np.flatnonzero(np.isfinite(gaps))
+    if finite.size == 0:
+        return "**No level could be scored** — no finite coverage gap in the table."
+
+    worst = int(finite[np.abs(gaps[finite]).argmax()])
     quantile = float(table["quantile"].to_numpy(dtype="float64")[worst])
     empirical = float(table["empirical"].to_numpy(dtype="float64")[worst])
     direction = "under-covers" if gaps[worst] < 0 else "over-covers"

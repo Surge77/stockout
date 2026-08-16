@@ -102,7 +102,9 @@ nominal 0.9 delivered about 0.72 and you had to over-ask to land on the service 
 wanted.
 
 `python -m stockout calibration` measures it, and `--model gbm_conformal` corrects it with
-split-conformal offsets learned on a held-out tail of the training window:
+conformal offsets learned on a held-out tail of the training window — the arithmetic of
+split conformal, without its theorem, because the deployed model is refitted on more data
+than the residuals describe. The coverage below is measured, not guaranteed:
 
 | nominal | 0.50 | 0.75 | 0.80 | 0.90 | 0.95 | 0.99 |
 |---|---|---|---|---|---|---|
@@ -221,7 +223,7 @@ reports/                generated charts — regenerated, never committed
 ```bash
 ruff check .                                  # lint only; never `ruff format` (ADR 0004)
 pyright                                       # type gate
-pytest --cov --cov-fail-under=90              # 326 passing, 0 skipped, 98% covered
+pytest --cov --cov-fail-under=90              # 328 passing, 0 skipped, 98% covered
 ```
 
 Unit tests never touch the network. A `conftest.py` autouse fixture replaces

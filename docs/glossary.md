@@ -49,9 +49,13 @@ which is precisely the case here. Measured with `python -m stockout calibration`
 
 **Split conformal prediction** — correcting a quantile by the residuals it produced on
 data it was not fitted on. Assumes only that those residuals are exchangeable with the
-ones to come — no normality, no variance model. The `(n + 1)` in the order statistic is
-the finite-sample correction that turns a percentile of some errors into a coverage
-guarantee.
+ones to come — no normality, no variance model — and on that assumption the `(n + 1)` in
+the order statistic turns a percentile of some errors into a marginal coverage guarantee.
+
+The guarantee holds for *the estimator that produced the residuals*. `models/conformal.py`
+deploys a differently-fitted one, so what it applies is the conformal arithmetic without
+the theorem behind it — heuristic calibration, judged on measured coverage
+([ADR 0009](decisions/0009-conformal-calibration-not-a-recalibrated-loss.md)).
 
 **Conformity score** — the quantity whose distribution the correction is read from. Here
 `(actual − predicted) / median prediction`, scaled rather than raw so that one offset can
