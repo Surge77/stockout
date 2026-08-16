@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
 import pandas as pd
 
 _DATE_COLUMNS: tuple[str, ...] = ("train_start", "train_end", "test_start", "test_end")
@@ -44,6 +45,107 @@ def to_markdown(results: pd.DataFrame, *, model_name: str) -> str:
         [[str(v) for v in row] for row in display.itertuples(index=False)],
     )
     return f"{header}\n\n{table}\n\n{_verdict_line(results)}\n"
+
+
+_FRONTIER_FORMATS: dict[str, str] = {
+    "quantile": "{:.2f}",
+    "fill_rate": "{:.4f}",
+    "cycle_service_level": "{:.3f}",
+    "holding_cost": "{:,.0f}",
+    "shortage_cost": "{:,.0f}",
+    "total_cost": "{:,.0f}",
+    "mean_on_hand": "{:,.0f}",
+    "mean_on_order": "{:,.0f}",
+}
+
+_CALIBRATION_FORMATS: dict[str, str] = {
+    "quantile": "{:.2f}",
+    "empirical": "{:.3f}",
+    "gap": "{:+.3f}",
+    "pinball": "{:,.1f}",
+}
+
+
+def frontier_to_markdown(table: pd.DataFrame) -> str:
+    """The cost of each service level, and which one was cheapest.
+
+    Naming the winner is the whole point. A frontier table that leaves the reader to
+    scan for the smallest number is a chart pretending to be an argument.
+    """
+    if table.empty:
+        return "No service levels were priced."
+
+    display = table.copy()
+    for column, fmt in _FRONTIER_FORMATS.items():
+        if column in display.columns:
+            display[column] = display[column].map(lambda v, f=fmt: f.format(v))
+
+    header = f"### the cost of stocking to each quantile — {len(table)} levels priced"
+    body = _markdown_table(
+        [str(c) for c in display.columns],
+        [[str(v) for v in row] for row in display.itertuples(index=False)],
+    )
+    return f"{header}\n\n{body}\n\n{_cheapest_line(table)}\n"
+
+
+def calibration_to_markdown(table: pd.DataFrame, *, model_name: str) -> str:
+    """Nominal against empirical coverage, and the worst miss named outright.
+
+    The single number a reader should leave with is the largest gap, because a frontier
+    built on levels that do not hold prices a policy nobody selected. Naming it is the
+    same discipline as `frontier_to_markdown` naming the cheapest row.
+    """
+    if table.empty:
+        return f"No quantiles were scored for `{model_name}`."
+
+    display = table.copy()
+    for column, fmt in _CALIBRATION_FORMATS.items():
+        if column in display.columns:
+            display[column] = display[column].map(lambda v, f=fmt: f.format(v))
+
+    header = f"### `{model_name}` — coverage against the level it claims"
+    body = _markdown_table(
+        [str(c) for c in display.columns],
+        [[str(v) for v in row] for row in display.itertuples(index=False)],
+    )
+    return f"{header}\n\n{body}\n\n{_worst_miss_line(table)}\n"
+
+
+def _worst_miss_line(table: pd.DataFrame) -> str:
+    """Positional, and signed: under-covering is the direction that costs a sale.
+
+    A NaN gap is not a small gap. `coverage_table` produces one for a column whose label
+    is not a quantile, and for a scoring window with no rows in it; `argmax` over an array
+    containing NaN still returns an index, and the line would then announce a miss of
+    `nan` as over-coverage. Non-finite rows are dropped, and a table with nothing finite
+    left says so rather than naming one.
+    """
+    gaps = table["gap"].to_numpy(dtype="float64")
+    finite = np.flatnonzero(np.isfinite(gaps))
+    if finite.size == 0:
+        return "**No level could be scored** — no finite coverage gap in the table."
+
+    worst = int(finite[np.abs(gaps[finite]).argmax()])
+    quantile = float(table["quantile"].to_numpy(dtype="float64")[worst])
+    empirical = float(table["empirical"].to_numpy(dtype="float64")[worst])
+    direction = "under-covers" if gaps[worst] < 0 else "over-covers"
+    return (
+        f"**Worst miss at quantile {quantile:.2f}** — {direction} by "
+        f"{abs(gaps[worst]):.3f}, delivering {empirical:.1%} of the days it promises."
+    )
+
+
+def _cheapest_line(table: pd.DataFrame) -> str:
+    """Positional rather than label-based: a frontier's index carries no meaning."""
+    costs = table["total_cost"].to_numpy(dtype="float64")
+    best = int(costs.argmin())
+    quantile = float(table["quantile"].to_numpy(dtype="float64")[best])
+    fill_rate = float(table["fill_rate"].to_numpy(dtype="float64")[best])
+    short_days = int(table["stockout_days"].to_numpy(dtype="int64")[best])
+    return (
+        f"**Cheapest at quantile {quantile:.2f}** — total cost {costs[best]:,.0f}, "
+        f"fill rate {fill_rate:.1%}, {short_days} short day(s)."
+    )
 
 
 def _markdown_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:

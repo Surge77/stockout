@@ -43,12 +43,33 @@ costs nine times an over-forecast.
 calibration check: a well-behaved 0.9 quantile is exceeded 10% of the time. A 0.9 quantile
 covering 99% is not conservative, it is wrong, and it costs money in carried stock.
 
+**Calibration** — whether a stated level is the achieved one. Distinct from accuracy: a
+model can be the most accurate available and still promise a 0.9 that only delivers 0.72,
+which is precisely the case here. Measured with `python -m stockout calibration`.
+
+**Split conformal prediction** — correcting a quantile by the residuals it produced on
+data it was not fitted on. Assumes only that those residuals are exchangeable with the
+ones to come — no normality, no variance model — and on that assumption the `(n + 1)` in
+the order statistic turns a percentile of some errors into a marginal coverage guarantee.
+
+The guarantee holds for *the estimator that produced the residuals*. `models/conformal.py`
+deploys a differently-fitted one, so what it applies is the conformal arithmetic without
+the theorem behind it — heuristic calibration, judged on measured coverage
+([ADR 0009](decisions/0009-conformal-calibration-not-a-recalibrated-loss.md)).
+
+**Conformity score** — the quantity whose distribution the correction is read from. Here
+`(actual − predicted) / median prediction`, scaled rather than raw so that one offset can
+serve a busy store and a quiet one.
+
 ## Inventory
 
 **Newsvendor critical ratio** — `Cu / (Cu + Co)`, the optimal service level for a
 single-period stocking decision. `Cu` is the cost of being one unit short, `Co` the cost of
 one unit left over. **This is the quantile to forecast** — derived from the cost pair, not
-tuned.
+tuned. It answers a *single-period* question, and stops being the optimum once the
+protection interval is longer than a day: holding is then charged on every day of that
+interval while a lost sale is charged once, so the optimal level falls
+([ADR 0010](decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md)).
 
 **Order-up-to level (S)** — the base-stock target. Each review period, order enough to
 bring the inventory position up to S.

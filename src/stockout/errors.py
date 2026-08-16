@@ -27,3 +27,11 @@ class LeakageError(StockoutError):
 
 class BacktestError(StockoutError):
     """A backtest could not be laid out — usually too little history for the folds asked for."""
+
+
+class MissingDependencyError(StockoutError):
+    """An optional extra is needed for this path and is not installed.
+
+    Separate from `ImportError` on purpose: the CLI already turns a `StockoutError` into
+    one readable line, and "install the extra" is a user instruction, not a stack trace.
+    """

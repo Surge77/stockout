@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockout"
-version = "0.1.0"
+version = "0.3.0"
 description = "Retail demand forecasting scored by the decision it drives — replenishment — with rolling-origin backtesting and leakage guards that fail the test suite, not the code review."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,11 +42,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# LightGBM lives behind an extra because src/stockout/models/gbm.py is a stub. The
-# whole test suite runs, and the seasonal-naive backtest produces a real number,
-# without it installed. Nothing about the spine depends on a model existing.
+# LightGBM stays behind an extra because the spine does not depend on a model
+# existing: `pip install -e .` still fetches, describes and backtests the baselines,
+# and `stockout frontier` is the only command that needs this.
 gbm = ["lightgbm==4.7.0"]
 dev = [
+    # Self-referencing, so the pin lives in exactly one place. Development installs
+    # LightGBM because the gradient-boosted models are now real code, and code that CI
+    # cannot execute is code CI cannot measure.
+    "stockout[gbm]",
     "pytest==9.0.3",
     "pytest-cov==7.1.0",
     "ruff==0.16.3",

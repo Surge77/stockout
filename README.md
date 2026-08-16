@@ -15,7 +15,9 @@ Named after the failure it exists to prevent.
 ```bash
 pip install -e ".[dev]"
 python -m stockout describe                            # what's in the sample
-python -m stockout backtest --model seasonal_naive     # a real number, no ML yet
+python -m stockout backtest --model gbm                # beats the baseline by 47%
+python -m stockout calibration                         # does a stated 0.9 cover 90%? no
+python -m stockout frontier --model gbm_conformal      # what that forecast costs to stock
 ```
 
 ## Why this project exists
@@ -46,17 +48,19 @@ the target moves; rerun a grid search, it does not.
 ## What's in here, and what isn't
 
 **In the package** — acquisition, schema validation, cleaning, splitting, feature
-construction, metrics, the backtest loop, three baselines. Everything with one correct
-answer, tested and type-checked.
+construction, metrics, the backtest loop, three baselines, a LightGBM point model, a
+quantile model, the conformal calibration that makes its stated levels mean something, and
+the inventory simulator that prices what stocking to each level costs. Everything with one
+correct answer, tested and type-checked.
 
 **In the notebook** — the analysis. The five questions are committed in
 [docs/questions.md](docs/questions.md) *before* any chart exists, so findings cannot be
 retrofitted to whatever turned up. See [ADR 0006](docs/decisions/0006-analysis-in-notebooks.md).
 
-**Not built yet** — the LightGBM point and quantile models (`models/gbm.py`) and the
-inventory simulator (`inventory/`) are typed stubs with their reasoning committed and
-their tests written and skipped. The specification exists; the implementation does not.
-The backtest harness runs without them.
+**Not answered yet** — those five questions. Every cell that answers them runs end to end;
+what is missing is data worth answering them from, because every number in this repository
+was produced by a generator. That is one `python -m stockout fetch` and one changed line at
+the top of the notebook away. See [Known limits](#known-limits).
 
 ## Current state
 
@@ -65,13 +69,62 @@ sample — 4 stores, 730 days, 5 rolling-origin folds, 42-day horizon.
 
 | Model | Mean WMAPE | MASE | |
 |---|---|---|---|
-| `seasonal_naive` | 0.1489 | **1.000** | the baseline, by definition |
+| `gbm` | 0.0793 | **0.533** | beats the baseline by 46.7% |
+| `gbm_quantile` | 0.0811 | 0.545 | the median of the quantile fit |
+| `seasonal_naive` | 0.1489 | 1.000 | the baseline, by definition |
 | `moving_average` | 0.1606 | 1.080 | 8.0% worse |
 | `naive_last` | 0.1695 | 1.144 | 14.4% worse |
 
-The gap between the top and bottom rows is the value of knowing what day of the week it
-is. **No model has beaten the baseline yet, because no model exists yet** — that is the
-point of establishing the floor first.
+The gap between `seasonal_naive` and `naive_last` is the value of knowing what day of the
+week it is. The gap at the top is worth less than it looks: this generator's promotion
+calendar and weekday pattern are deterministic, so a model with calendar features is being
+handed most of the answer. On Rossmann it would have to earn it again.
+
+And accuracy is not the deliverable. `python -m stockout frontier` prices what stocking to
+each quantile actually costs, on the newest fold, for one store:
+
+| quantile | fill rate | stockout days | holding | shortage | **total** |
+|---|---|---|---|---|---|
+| 0.50 | 0.945 | 22 | 8,794 | 56,291 | 65,086 |
+| 0.75 | 0.963 | 18 | 15,238 | 37,626 | 52,864 |
+| 0.80 | 0.971 | 18 | 17,720 | 30,274 | 47,994 |
+| 0.90 | 0.980 | 10 | 23,907 | 20,364 | **44,271** |
+| 0.95 | 0.984 | 8 | 30,102 | 16,318 | 46,420 |
+| 0.99 | 0.990 | 6 | 38,926 | 10,544 | 49,470 |
+
+Cost is U-shaped in the service level, so there is a cheapest place to stand and it is not
+"as accurate as possible". That curve is the project.
+
+**It was also not where the theory said it should be.** The cost pair (`Cu` 3, `Co` 1)
+derives a critical ratio of 0.75, and 0.75 was not the cheapest row — 0.90 was. The reason
+is measurable rather than mysterious: the quantile models under-cover out of sample, so a
+nominal 0.9 delivered about 0.72 and you had to over-ask to land on the service level you
+wanted.
+
+`python -m stockout calibration` measures it, and `--model gbm_conformal` corrects it with
+conformal offsets learned on a held-out tail of the training window — the arithmetic of
+split conformal, without its theorem, because the deployed model is refitted on more data
+than the residuals describe. The coverage below is measured, not guaranteed:
+
+| nominal | 0.50 | 0.75 | 0.80 | 0.90 | 0.95 | 0.99 |
+|---|---|---|---|---|---|---|
+| raw covers | 0.357 | 0.564 | 0.607 | 0.721 | 0.843 | 0.893 |
+| calibrated covers | 0.414 | 0.650 | 0.693 | 0.779 | 0.886 | 0.929 |
+
+That moves the cheapest service level from **0.90 to 0.80** and the fold's total cost from
+44,271 to 43,456 — the theory's prediction was right and the model was wrong, which is the
+better way round. It is a half-fix: a nominal 0.9 still delivers 0.779, and on a two-store
+draw with only 70 calibration rows the correction is *worse* than no correction at all.
+Both numbers are in [docs/results.md](docs/results.md) and
+[ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md), reported
+rather than smoothed over.
+
+**Add a delivery lag and the target moves again.** `--lead-time 7` opens a real order
+pipeline and sizes the base-stock level across the protection interval; costs rise sixfold
+and the cheapest level drops to 0.50, because holding is charged on every day of that
+interval and a lost sale only once. `Cu / (Cu + Co)` is the answer to a single-period
+question and stops being the answer when the interval is longer than a day
+([ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md)).
 
 ## The four traps this data sets
 
@@ -101,11 +154,22 @@ pip install -e ".[dev,notebook]"
 python -m stockout describe                          # rows, stores, nulls, calendar gaps
 python -m stockout backtest --model seasonal_naive   # the baseline
 python -m stockout backtest --model naive_last       # what ignoring the weekday costs
+python -m stockout backtest --model gbm               # the gradient-boosted model
+python -m stockout calibration                       # does each quantile cover what it claims
+python -m stockout frontier --store 3                # the cost of each service level
+python -m stockout frontier --model gbm_conformal    # the same, with calibrated quantiles
+python -m stockout frontier --lead-time 7            # and with stock that takes a week
 python -m stockout synth --out data/mine.csv --stores 20 --days 1095
 ```
 
 Useful flags: `--horizon`, `--folds`, `--gap`, `--min-train-days`, and `--sliding` for a
-fixed-width training window instead of an expanding one.
+fixed-width training window instead of an expanding one. `frontier` also takes `--model`
+and `--lead-time`; a lead time above zero switches the simulator from a repeated
+newsvendor to an `(R, S)` system and re-sizes the level to match.
+
+The `gbm` models need LightGBM: `pip install -e ".[gbm]"`. Everything else runs without it,
+and asking for a model you have not installed prints one line saying so rather than a
+traceback.
 
 ## Data
 
@@ -140,13 +204,15 @@ src/stockout/
 ├── evaluate/metrics.py WMAPE, MASE, RMSPE, pinball, coverage. Deliberately no MAPE
 ├── evaluate/backtest.py the fold loop; a fresh model per fold
 ├── models/baselines.py naive_last, seasonal_naive, moving_average
-├── models/gbm.py       STUB — LightGBM point (tweedie) and quantile
-├── inventory/          STUB — order-up-to policy and the cost simulation
-└── cli.py              stockout fetch | synth | describe | backtest
+├── models/gbm.py       LightGBM point (tweedie) and quantile; imported lazily
+├── models/conformal.py split-conformal calibration, so a stated level means something
+├── inventory/policy.py the critical ratio, the base-stock level, the order
+├── inventory/simulate.py the day-by-day walk, the delivery pipeline, the frontier
+└── cli.py              fetch | synth | describe | backtest | calibration | frontier
 
 docs/questions.md       the five hypotheses, written first
 docs/results.md         the answers — empty until the analysis is done
-docs/decisions/         seven ADRs, each stating what the decision cost
+docs/decisions/         ten ADRs, each stating what the decision cost
 notebooks/              the analysis
 data/                   gitignored, except one small synthetic sample
 reports/                generated charts — regenerated, never committed
@@ -157,7 +223,7 @@ reports/                generated charts — regenerated, never committed
 ```bash
 ruff check .                                  # lint only; never `ruff format` (ADR 0004)
 pyright                                       # type gate
-pytest --cov --cov-fail-under=90              # 232 passing, 10 skipped, 98% covered
+pytest --cov --cov-fail-under=90              # 328 passing, 0 skipped, 98% covered
 ```
 
 Unit tests never touch the network. A `conftest.py` autouse fixture replaces
@@ -165,9 +231,12 @@ Unit tests never touch the network. A `conftest.py` autouse fixture replaces
 laptop that happens to have credentials and failing in CI. Network work goes behind
 `@pytest.mark.integration`, excluded by default.
 
-The ten skipped tests are the specification for the unbuilt half — the GBM models and the
-inventory simulator. They are written first on purpose, so the intended behaviour is on
-record before the implementation can shape it.
+The ten tests that used to be skipped were the specification for the unbuilt half. They
+are green now, and one of them settled a design question the prose had got wrong: the
+stub's docstring described a delivery lead time inside the simulator, while its own test
+required that a shortfall on one day not carry into the next. Only one of those could
+survive, and the executable one won —
+[ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md).
 
 `tests/test_no_random_splits.py` parses every module's AST and asserts that no shuffled
 split, no `random_state`, and no scikit-learn import executes anywhere in the package. It
@@ -180,14 +249,31 @@ explanation.
 - **The committed sample is synthetic.** It reproduces four structures that make the real
   problem hard, and nothing else. Anything learned from it is a statement about a
   generator, not about retail. It is used to test machinery, never to support a finding.
-- **Rossmann is revenue, not units, and has no inventory column at all.** When the
-  simulator lands, demand and stock will both be in currency units of stock-at-cost —
-  internally consistent, and explicitly *not* a unit-level simulation. Converting via an
-  assumed basket size would add decimal places and no truth. M5 is the upgrade path.
-- **No cross-series learning.** Per-store baselines cannot share structure between stores,
-  which hurts short histories most. Question Q2 exists to measure how much.
-- **The decision layer is unbuilt**, so the central claim — that stocking to a forecast
-  quantile beats stocking to a mean — is currently a hypothesis (Q5), not a result.
+- **Rossmann is revenue, not units, and has no inventory column at all.** Demand and stock
+  are both in currency units of stock-at-cost — internally consistent, and explicitly *not*
+  a unit-level simulation. Converting via an assumed basket size would add decimal places
+  and no truth. M5 is the upgrade path.
+- **Pooled, but only by accident.** The baselines are strictly per store. The
+  gradient-boosted models are one global fit with `store` as a feature, which pools by
+  default and shares nothing deliberately — no hierarchy, no per-store effects, no
+  borrowing toward a group mean. Short histories are served worst either way, and
+  question Q2 exists to measure how much.
+- **The quantile models still under-cover, even calibrated.** A nominal 0.9 delivers 0.721
+  raw and 0.779 after conformal correction. Half the gap is gone; the other half is the
+  distribution shift between a 42-day calibration window and the 42-day window after it,
+  and no amount of arithmetic on the first will reveal the second.
+- **Calibration needs rows and is not free below about a hundred of them.** On a two-store
+  draw it made both coverage and pinball loss worse. The row count is printed rather than
+  policed, because a threshold picked from four draws is a guess with a table under it.
+- **Coverage is corrected on average, not per store.** A single quiet shop, or a single
+  December, can still be badly covered and this layer will not notice —
+  [ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md).
+- **The delivery pipeline is opt-in, and stock in transit is free.** By default the
+  simulator prices a repeated single-period newsvendor: stock is topped up daily, unmet
+  demand is lost ([ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md)).
+  `--lead-time` opens a real pipeline, but nothing is charged for goods on a lorry, so the
+  model prefers a long pipeline to a full shelf in a way a financed business would not —
+  [ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).
 
 ## Documentation
 
@@ -196,7 +282,7 @@ explanation.
 - [docs/architecture.md](docs/architecture.md) — flow, the three guards, module map
 - [docs/data-dictionary.md](docs/data-dictionary.md) — columns, traps, future-known vs observed
 - [docs/glossary.md](docs/glossary.md) — forecasting and inventory terms
-- [docs/decisions/](docs/decisions/) — seven ADRs, each with its cost
+- [docs/decisions/](docs/decisions/) — ten ADRs, each with its cost
 - [MODEL_CARD.md](MODEL_CARD.md) — what the models are, and are not, for
 
 ## Licence

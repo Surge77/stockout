@@ -111,3 +111,41 @@ def coverage(y_true: ArrayLike, y_upper: ArrayLike) -> float:
     if actual.size == 0:
         return float("nan")
     return float(np.mean(actual <= upper))
+
+
+def coverage_table(y_true: ArrayLike, quantile_forecasts: pd.DataFrame) -> pd.DataFrame:
+    """Nominal against empirical coverage, one row per fitted quantile.
+
+    The single table that says whether a service level is a service level. `gap` is
+    signed on purpose — negative is the dangerous direction, because a level that
+    under-covers sells a promise it does not keep, and the shortage cost lands on the
+    business rather than in the metric.
+
+    The quantile is read from the column label, so a column that is not a number becomes
+    NaN in the `nominal` column rather than crashing a report.
+    """
+    if quantile_forecasts.shape[1] == 0:
+        raise ValueError("no quantile forecasts to score")
+
+    rows = []
+    for name in quantile_forecasts.columns:
+        nominal = _as_quantile(name)
+        empirical = coverage(y_true, quantile_forecasts[name])
+        rows.append(
+            {
+                "quantile": nominal,
+                "empirical": empirical,
+                "gap": empirical - nominal,
+                "pinball": pinball(y_true, quantile_forecasts[name], tau=nominal)
+                if 0.0 < nominal < 1.0
+                else float("nan"),
+            }
+        )
+    return pd.DataFrame(rows, columns=["quantile", "empirical", "gap", "pinball"])
+
+
+def _as_quantile(name: object) -> float:
+    try:
+        return float(str(name))
+    except ValueError:
+        return float("nan")

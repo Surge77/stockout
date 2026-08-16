@@ -97,3 +97,50 @@ def test_a_perfect_forecast_scores_zero_everywhere(actual: list[float]) -> None:
     assert metrics.mae(actual, actual) == 0.0
     assert metrics.rmse(actual, actual) == 0.0
     assert metrics.pinball(actual, actual, tau=0.7) == 0.0
+
+
+def test_the_coverage_table_signs_the_gap_so_the_dangerous_direction_reads_negative() -> None:
+    """Under-covering sells a promise the shelf does not keep. It must not look like a miss
+    in the harmless direction."""
+    import pandas as pd
+
+    actual = [10.0] * 10
+    predicted = pd.DataFrame({"0.9": [5.0] * 10, "0.5": [50.0] * 10})
+    table = metrics.coverage_table(actual, predicted)
+
+    assert table.loc[0, "empirical"] == pytest.approx(0.0)
+    assert table.loc[0, "gap"] == pytest.approx(-0.9)
+    assert table.loc[1, "gap"] == pytest.approx(0.5)
+
+
+def test_the_coverage_table_prices_each_level_with_its_own_pinball_loss() -> None:
+    """The loss the level was fitted under, so calibration can be judged against accuracy.
+
+    Two columns holding the *same* forecast, so the only thing that can separate their
+    losses is the tau each is scored at. A perfect forecast would score zero at every
+    level and the assertion would pass even if the column label were ignored entirely —
+    which is the bug this test exists to catch.
+    """
+    import pandas as pd
+
+    # Under-forecast by 10 everywhere. Pinball at tau is then tau * 10.
+    predicted = pd.DataFrame({"0.9": [90.0] * 4, "0.5": [90.0] * 4})
+    table = metrics.coverage_table([100.0] * 4, predicted)
+
+    assert table.loc[0, "pinball"] == pytest.approx(9.0)
+    assert table.loc[1, "pinball"] == pytest.approx(5.0)
+
+
+def test_a_column_that_is_not_a_quantile_scores_nan_rather_than_crashing_a_report() -> None:
+    import pandas as pd
+
+    table = metrics.coverage_table([10.0] * 4, pd.DataFrame({"mean": [10.0] * 4}))
+    assert pd.isna(table.loc[0, "quantile"])
+    assert pd.isna(table.loc[0, "pinball"])
+
+
+def test_a_coverage_table_needs_something_to_score() -> None:
+    import pandas as pd
+
+    with pytest.raises(ValueError, match="no quantile forecasts"):
+        metrics.coverage_table([1.0], pd.DataFrame(index=[0]))

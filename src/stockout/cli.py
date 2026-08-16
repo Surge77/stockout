@@ -1,4 +1,4 @@
-"""`stockout fetch | synth | describe | backtest`.
+"""`stockout fetch | synth | describe | backtest | calibration | frontier`.
 
 Handlers return an exit code and never raise past `main`; a domain error becomes a
 one-line `error: ...` on stderr, because a traceback is not a user interface.
@@ -11,15 +11,23 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import pandas as pd
+
 from . import config
 from .data import schemas as s
 from .data.loaders import read_sales, write_sales
 from .data.synth import make_sales
 from .data.validate import calendar_gaps, null_profile, validate_sales
-from .errors import StockoutError
+from .errors import BacktestError, StockoutError
 from .evaluate.backtest import backtest
-from .evaluate.report import to_markdown
-from .models.baselines import BASELINES
+from .evaluate.metrics import coverage_table
+from .evaluate.report import calibration_to_markdown, frontier_to_markdown, to_markdown
+from .inventory.policy import critical_ratio
+from .inventory.simulate import frontier
+from .models import FORECASTER_NAMES, forecaster
+from .models.conformal import ConformalQuantileForecaster, QuantileModel
+from .models.gbm import GbmQuantileForecaster
+from .split.rolling import Fold, rolling_origin, split_frame
 
 
 def _force_utf8_output() -> None:
@@ -53,7 +61,7 @@ def _parser() -> argparse.ArgumentParser:
 
     p_backtest = sub.add_parser("backtest", help="rolling-origin backtest of one model")
     p_backtest.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
-    p_backtest.add_argument("--model", default="seasonal_naive", choices=sorted(BASELINES))
+    p_backtest.add_argument("--model", default="seasonal_naive", choices=FORECASTER_NAMES)
     p_backtest.add_argument("--folds", type=int, default=config.DEFAULT_N_FOLDS)
     p_backtest.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
     p_backtest.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
@@ -64,6 +72,48 @@ def _parser() -> argparse.ArgumentParser:
         "--sliding",
         action="store_true",
         help="fixed-width training window instead of an expanding one",
+    )
+
+    p_frontier = sub.add_parser(
+        "frontier", help="price each service level by the stock and lost sales it implies"
+    )
+    p_frontier.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
+    p_frontier.add_argument(
+        "--store", type=int, default=None, help="defaults to the first store in the file"
+    )
+    p_frontier.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
+    p_frontier.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
+    p_frontier.add_argument(
+        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
+    )
+    p_frontier.add_argument(
+        "--review-period",
+        type=int,
+        default=config.DEFAULT_REVIEW_PERIOD_DAYS,
+        help="cycle length for the service-level column; does not change what is ordered",
+    )
+    p_frontier.add_argument(
+        "--lead-time",
+        type=int,
+        default=0,
+        help="days between placing an order and its arrival; 0 prices a repeated "
+        "newsvendor, above 0 opens a delivery pipeline and sizes across the "
+        "protection interval",
+    )
+    p_frontier.add_argument(
+        "--model",
+        default=GbmQuantileForecaster.name,
+        choices=(GbmQuantileForecaster.name, ConformalQuantileForecaster.name),
+    )
+
+    p_calibration = sub.add_parser(
+        "calibration", help="does each quantile cover the share of days it claims to"
+    )
+    p_calibration.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
+    p_calibration.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
+    p_calibration.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
+    p_calibration.add_argument(
+        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
     )
     return parser
 
@@ -109,10 +159,9 @@ def _backtest(args: argparse.Namespace) -> int:
     frame = read_sales(args.data)
     validate_sales(frame)
 
-    factory = BASELINES[args.model]
     results = backtest(
         frame,
-        factory,
+        forecaster(args.model, horizon=args.horizon),
         n_folds=args.folds,
         horizon=args.horizon,
         gap=args.gap,
@@ -120,6 +169,127 @@ def _backtest(args: argparse.Namespace) -> int:
         expanding=not args.sliding,
     )
     print(to_markdown(results, model_name=args.model))
+    return 0
+
+
+def _newest_fold(args: argparse.Namespace) -> tuple[Fold, pd.DataFrame, pd.DataFrame]:
+    """Read, validate, and lay out the single most recent rolling-origin fold."""
+    frame = read_sales(args.data)
+    validate_sales(frame)
+
+    fold = rolling_origin(
+        frame[s.DATE],
+        n_folds=1,
+        horizon=args.horizon,
+        gap=args.gap,
+        min_train_days=args.min_train_days,
+    )[-1]
+    train, test = split_frame(frame, fold)
+    return fold, train, test
+
+
+def _quantile_model(name: str, *, horizon: int) -> QuantileModel:
+    if name == ConformalQuantileForecaster.name:
+        return ConformalQuantileForecaster(horizon=horizon)
+    return GbmQuantileForecaster(horizon=horizon)
+
+
+def _frontier(args: argparse.Namespace) -> int:
+    """Fit quantiles on the newest fold, then price what stocking to each would cost.
+
+    One store, because inventory is held per store and averaging a fill rate across a
+    quiet shop and a busy one describes neither of them.
+    """
+    # Checked before anything is fitted. `simulate` would reject them too, but only after
+    # LightGBM has spent several seconds training a model nobody can use, and a ValueError
+    # escaping `main` is a traceback rather than a message.
+    if args.review_period < 1:
+        raise BacktestError("--review-period must be at least 1 day")
+    if args.lead_time < 0:
+        raise BacktestError("--lead-time cannot be negative")
+
+    fold, train, test = _newest_fold(args)
+
+    store = int(test[s.STORE].iloc[0]) if args.store is None else args.store
+    rows = test[s.STORE] == store
+    if not bool(rows.any()):
+        raise BacktestError(f"store {store} has no rows in the test window")
+
+    model = _quantile_model(args.model, horizon=args.horizon).fit(train)
+    quantiles = model.predict_quantiles(test)
+
+    underage, overage = config.underage_cost(), config.overage_cost()
+    table = frontier(
+        test.loc[rows, s.SALES],
+        quantiles.loc[rows],
+        lead_time_days=args.lead_time,
+        review_period_days=args.review_period,
+        holding_cost=overage,
+        shortage_cost=underage,
+    )
+
+    system = (
+        "single-period stocking"
+        if args.lead_time == 0
+        else f"{args.lead_time}d lead time, sized across a {args.lead_time + 1}d "
+        "protection interval"
+    )
+    target = critical_ratio(underage_cost=underage, overage_cost=overage)
+    print(
+        f"store {store} · {fold.test_start.date()} to {fold.test_end.date()} · "
+        f"horizon {args.horizon}d · {args.model} · {system}, {args.review_period}d cycles"
+    )
+    print(
+        f"newsvendor target quantile {target:.2f} "
+        f"(Cu {underage:.1f} short, Co {overage:.1f} carried) — derived, not tuned"
+    )
+    print(f"quantile crossing on {model.crossing_rate:.1%} of rows, sorted before use\n")
+    print(frontier_to_markdown(table))
+    return 0
+
+
+def _calibration(args: argparse.Namespace) -> int:
+    """Score the raw and the calibrated quantiles on the same held-out window.
+
+    Both tables, always. Printing only the calibrated one would turn a measurement into
+    an advertisement, and the size of the correction is the interesting number.
+    """
+    fold, train, test = _newest_fold(args)
+    trading = test[s.OPEN] == 1
+    actual = test.loc[trading, s.SALES]
+
+    # Checked before either model is fitted. A window of nothing but closures scores every
+    # level NaN, and a coverage table of NaN reads as a result rather than as an absence.
+    if not bool(trading.any()):
+        raise BacktestError(
+            f"the test window {fold.test_start.date()} to {fold.test_end.date()} contains "
+            "no trading day, so no coverage can be measured"
+        )
+
+    raw = GbmQuantileForecaster(horizon=args.horizon).fit(train)
+    calibrated = ConformalQuantileForecaster(horizon=args.horizon).fit(train)
+
+    print(
+        f"{fold.test_start.date()} to {fold.test_end.date()} · horizon {args.horizon}d · "
+        f"{int(trading.sum()):,} trading rows held out · "
+        f"{calibrated.calibration_rows:,} rows in the calibration window\n"
+    )
+    for model in (raw, calibrated):
+        predicted = model.predict_quantiles(test).loc[trading]
+        print(
+            calibration_to_markdown(
+                coverage_table(actual, predicted), model_name=model.name
+            )
+        )
+
+    if calibrated.saturated_quantiles:
+        levels = ", ".join(f"{level:.2f}" for level in calibrated.saturated_quantiles)
+        print(
+            f"> Quantiles {levels} saturate: the calibration window holds too few rows "
+            f"for the finite-sample correction to land anywhere but on the largest "
+            f"residual in it. Their offsets are the worst day that happened, not an "
+            f"estimate of a quantile."
+        )
     return 0
 
 
@@ -133,6 +303,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "synth": _synth,
         "describe": _describe,
         "backtest": _backtest,
+        "frontier": _frontier,
+        "calibration": _calibration,
     }
     try:
         return handlers[args.command](args)
