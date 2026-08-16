@@ -141,3 +141,94 @@ def test_a_higher_quantile_buys_fill_rate_with_carried_stock() -> None:
     assert table["fill_rate"].is_monotonic_increasing
     assert table["mean_on_hand"].is_monotonic_increasing
     assert table["shortage_cost"].is_monotonic_decreasing
+
+
+# --- the delivery pipeline (ADR 0010) -------------------------------------------------
+
+
+def test_without_a_lead_time_nothing_is_ever_in_transit() -> None:
+    """The default is still the repeated newsvendor of ADR 0008, to the last decimal."""
+    result = simulate(pd.Series([100.0] * 10), pd.Series([120.0] * 10))
+    assert result.mean_on_order == pytest.approx(0.0)
+
+
+def test_an_order_placed_today_cannot_be_sold_today() -> None:
+    """The whole content of a lead time, in four days.
+
+    Nothing is wanted until the last day, by which point the order placed on the first
+    has landed. Move the demand to the front and the same policy is short, because the
+    lorry has not arrived yet.
+    """
+    level = pd.Series([100.0] * 4)
+    late = simulate(pd.Series([0.0, 0.0, 0.0, 100.0]), level, lead_time_days=2)
+    early = simulate(pd.Series([100.0, 0.0, 0.0, 0.0]), level, lead_time_days=2)
+
+    assert late.stockout_days == 0
+    assert early.stockout_days == 1
+
+
+def test_stock_already_on_a_lorry_is_not_ordered_a_second_time() -> None:
+    """The bullwhip guard, hand-checkable.
+
+    Ten quiet days, a level of 100 and a three-day wait. Exactly one order of 100 is
+    placed, on day one, and it sits in transit for three days before landing. A loop that
+    compared the level against on-hand alone would order another 100 every morning and
+    have 300 in the air by the third day.
+    """
+    result = simulate(
+        pd.Series([0.0] * 10), pd.Series([100.0] * 10), lead_time_days=3, review_period_days=1
+    )
+    assert result.mean_on_order == pytest.approx(30.0)
+    assert result.mean_on_hand == pytest.approx(70.0)
+
+
+def test_a_single_day_level_under_a_multi_day_wait_starves_the_shelf() -> None:
+    """The other half of ADR 0008's trap, and the reason `frontier` re-sizes.
+
+    A level that covers one day of demand, ordered against a three-day lead time, can
+    never hold more than one day of cover and spends most of the window empty. The
+    pipeline is not a free upgrade: it has to be paid for in the level.
+    """
+    result = simulate(
+        pd.Series([100.0] * 12), pd.Series([100.0] * 12), lead_time_days=3, review_period_days=1
+    )
+    assert result.stockout_days >= 8
+    assert result.fill_rate < 0.5
+
+
+def test_a_negative_lead_time_is_rejected_rather_than_read_as_early_delivery() -> None:
+    with pytest.raises(ValueError, match="lead time cannot be negative"):
+        simulate(pd.Series([1.0]), pd.Series([1.0]), lead_time_days=-1)
+    with pytest.raises(ValueError, match="lead time cannot be negative"):
+        frontier(pd.Series([1.0]), pd.DataFrame({"0.9": [1.0]}), lead_time_days=-1)
+
+
+def test_the_frontier_sizes_across_the_protection_interval_once_deliveries_take_time() -> None:
+    """A lead time must move the level too, or the shelf starves for the wrong reason.
+
+    Stocking to a single day's quantile under a seven-day wait would leave every service
+    level short; summing the quantile across the protection interval is what makes the
+    curve a curve again.
+    """
+    demand = pd.Series([100.0] * 60)
+    quantiles = pd.DataFrame({"0.5": [90.0] * 60, "0.9": [120.0] * 60})
+    table = frontier(demand, quantiles, lead_time_days=7, review_period_days=1)
+
+    assert (table["mean_on_order"] > 0.0).all()
+    assert table["fill_rate"].is_monotonic_increasing
+    assert table["fill_rate"].iloc[0] < 1.0
+
+
+def test_a_pipeline_opens_in_steady_state_rather_than_on_an_empty_shelf() -> None:
+    """Charging a policy for the warehouse having been built yesterday measures nothing.
+
+    With an explicitly empty opening shelf the first week is lost outright; with the
+    default the same policy is judged on the days it actually controls.
+    """
+    demand = pd.Series([100.0] * 60)
+    quantiles = pd.DataFrame({"0.9": [120.0] * 60})
+
+    warm = frontier(demand, quantiles, lead_time_days=7, review_period_days=1)
+    cold = frontier(demand, quantiles, lead_time_days=7, review_period_days=1, initial_stock=0.0)
+
+    assert cold["stockout_days"].iloc[0] > warm["stockout_days"].iloc[0]
