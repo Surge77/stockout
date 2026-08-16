@@ -51,7 +51,7 @@ dev = [
     # LightGBM because the gradient-boosted models are now real code, and code that CI
     # cannot execute is code CI cannot measure.
     "stockout[gbm]",
-    "pytest==9.0.3",
+    "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "ruff==0.16.3",
     "pyright==1.1.411",
