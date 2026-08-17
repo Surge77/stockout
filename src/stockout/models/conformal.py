@@ -13,6 +13,11 @@ training data the boosters never saw, in the geometry they will meet at deployme
 fits no distribution: no normality, no variance model, nothing taken from the residuals
 but an order statistic of them.
 
+The arithmetic of that order statistic — the finite-sample correction, the saturation
+test and the scale floor — lives in `conformity.py`, which has no model in it and can be
+checked against numbers written by hand. What is left here is the modelling: whose
+residuals, measured on which window, and what happens to a shut store.
+
 **What it is not, and this matters.** Textbook split conformal proves marginal coverage
 for *the model that produced the residuals*. The model deployed here is not that model —
 see "why two fits" below — so the proof does not transfer and nothing in this module
@@ -48,7 +53,6 @@ way.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Sequence
 from typing import Protocol
 
@@ -58,13 +62,8 @@ import pandas as pd
 from ..data import schemas as s
 from ..errors import BacktestError
 from .base import zero_when_closed
+from .conformity import floored_scale, pooled_offsets, saturates
 from .gbm import DEFAULT_NUM_BOOST_ROUND, DEFAULT_QUANTILES, GbmQuantileForecaster
-
-#: Lower bound on the per-row scale the conformity score is divided by, in the currency
-#: units the target is measured in. A shut store predicts zero, and dividing a residual
-#: by zero would put an infinity into a pooled quantile; the floor makes the arithmetic
-#: total without changing any row that carries real demand.
-SCALE_FLOOR = 1.0
 
 
 class QuantileModel(Protocol):
@@ -146,14 +145,14 @@ class ConformalQuantileForecaster:
 
         probe = self._factory().fit(inner)
         predicted = probe.predict_quantiles(calibration)
-        self.offsets = _offsets(
+        self.offsets = pooled_offsets(
             predicted=predicted,
             scale=probe.predict(calibration),
             frame=calibration,
         )
         self.calibration_rows = int((calibration[s.OPEN] == 1).sum())
         self.saturated_quantiles = tuple(
-            level for level in sorted(self.offsets) if _saturates(self.calibration_rows, level)
+            level for level in sorted(self.offsets) if saturates(self.calibration_rows, level)
         )
 
         self._model = self._factory().fit(train)
@@ -172,7 +171,7 @@ class ConformalQuantileForecaster:
 
         raw = self._model.predict_quantiles(future)
         self.crossing_rate = self._model.crossing_rate
-        scale = _scale(self._model.predict(future))
+        scale = floored_scale(self._model.predict(future))
 
         shifted = {
             column: zero_when_closed(
@@ -212,60 +211,3 @@ class ConformalQuantileForecaster:
                 "measured; lengthen it with calibration_days"
             )
         return inner, calibration
-
-
-def _offsets(
-    *, predicted: pd.DataFrame, scale: pd.Series, frame: pd.DataFrame
-) -> dict[float, float]:
-    """One conformity correction per quantile column, in units of the scale.
-
-    Closed days are excluded for the reason they are excluded everywhere else: a zero on
-    a shut Sunday is not a demand observation, and a residual of exactly zero repeated
-    across a seventh of the window drags every pooled quantile toward the middle.
-
-    That the window holds at least one trading row is `_split`'s guarantee, checked
-    before either model is fitted rather than after both are.
-    """
-    trading = np.asarray(frame[s.OPEN] == 1)
-    actual = np.asarray(frame[s.SALES], dtype="float64")[trading]
-    divisor = np.asarray(_scale(scale), dtype="float64")[trading]
-
-    return {
-        float(column): _conformal_quantile(
-            (actual - np.asarray(predicted[column], dtype="float64")[trading]) / divisor,
-            float(column),
-        )
-        for column in predicted.columns
-    }
-
-
-def _conformal_quantile(scores: np.ndarray, level: float) -> float:
-    """The `ceil((n + 1) * level) / n` order statistic of `scores`.
-
-    The `n + 1` is the finite-sample correction that would make the coverage statement
-    hold for a calibration set of this size rather than for an infinite one, and
-    `method="higher"` rounds towards more coverage rather than interpolating between two
-    neighbours. Both are kept because they are the right arithmetic and both err towards
-    covering; neither survives as a proof once the deployed model is refitted, which the
-    module docstring says out loud.
-    """
-    n = int(scores.size)
-    corrected = min(math.ceil((n + 1) * level) / n, 1.0)
-    return float(np.quantile(scores, corrected, method="higher"))
-
-
-def _saturates(n: int, level: float) -> bool:
-    """True when the corrected level runs off the end of the residuals there are.
-
-    The correction lands strictly inside the sample only when `ceil((n + 1) * level) < n`,
-    which for a 0.99 first holds at 199 rows and for a 0.9 at 19. Below that the offset is
-    not an estimate of a quantile, it is the worst thing that happened once — a fact about
-    the calibration window rather than about the model. It is reported instead of being
-    smoothed over, because a service level resting on a single observation should say so.
-    """
-    return n < 1 or math.ceil((n + 1) * level) / n >= 1.0
-
-
-def _scale(reference: pd.Series) -> pd.Series:
-    """Per-row divisor for the conformity score: the median prediction, floored."""
-    return reference.clip(lower=SCALE_FLOOR)

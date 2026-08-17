@@ -1,10 +1,10 @@
-"""Calibration: the arithmetic against a stub, then the claim against real boosters.
+"""Calibration: the modelling against a stub, then the claim against real boosters.
 
-Most of what can go wrong in a conformal layer is arithmetic — the wrong order statistic,
-a missing finite-sample correction, closed days pooled into the residuals — and none of
-it needs LightGBM to expose. `FlatQuantileModel` returns predictions with a known answer
-already in them, so a wrong offset is a failed assertion rather than a slightly different
-third decimal place.
+The arithmetic these tests used to cover now lives in `test_conformity.py`. What is left
+here is the modelling — whose residuals, measured on which window, and what happens to a
+shut store — and it is checked against `FlatQuantileModel`, which returns predictions with
+a known answer already in them, so a wrong offset is a failed assertion rather than a
+slightly different third decimal place.
 
 The two tests at the bottom fit the real thing, because a calibration layer that works on
 a stub and not on a booster has calibrated nothing.
@@ -12,7 +12,6 @@ a stub and not on a booster has calibrated nothing.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -20,12 +19,7 @@ from stockout.data import schemas as s
 from stockout.errors import BacktestError
 from stockout.evaluate.metrics import coverage
 from stockout.models import FORECASTER_NAMES, forecaster
-from stockout.models.conformal import (
-    SCALE_FLOOR,
-    ConformalQuantileForecaster,
-    _conformal_quantile,
-    _saturates,
-)
+from stockout.models.conformal import ConformalQuantileForecaster
 from stockout.split.rolling import rolling_origin, split_frame
 
 HORIZON = 42
@@ -81,39 +75,6 @@ def _frame(sales: list[float], *, open_flags: list[int] | None = None) -> pd.Dat
             s.OPEN: flags,
         }
     )
-
-
-def test_the_correction_is_the_order_statistic_and_not_a_plain_percentile() -> None:
-    """`ceil((n + 1) * level) / n` is what makes the coverage a guarantee.
-
-    Ten scores at 0.9: `ceil(11 * 0.9) / 10 = 1.0`, so the largest is taken. A plain
-    90th percentile would take the ninth, under-covering by exactly the correction the
-    finite-sample term exists to supply.
-    """
-    scores = np.arange(10, dtype="float64")
-    assert _conformal_quantile(scores, 0.9) == pytest.approx(9.0)
-
-
-def test_the_correction_saturates_rather_than_running_off_the_end() -> None:
-    """With few scores the corrected level exceeds 1 and must clamp, not raise."""
-    assert _conformal_quantile(np.array([1.0, 2.0]), 0.95) == pytest.approx(2.0)
-
-
-def test_saturation_is_detected_from_the_row_count_alone() -> None:
-    """The row count a level needs is derived, not chosen.
-
-    `ceil((n + 1) * level) < n` is the condition for the correction to land strictly
-    inside the sample. For a 0.99 that first holds at 199 rows, and for a 0.9 at 19 —
-    which is why a 42-day calibration window over a handful of stores can estimate the
-    middle of the grid and not the top of it.
-    """
-    assert _saturates(198, 0.99)
-    assert not _saturates(199, 0.99)
-
-    assert _saturates(18, 0.9)
-    assert not _saturates(19, 0.9)
-
-    assert _saturates(0, 0.5)
 
 
 def test_a_level_that_rests_on_one_observation_is_named_rather_than_smoothed_over() -> None:
@@ -251,11 +212,6 @@ def test_calibrated_quantiles_are_re_sorted_because_offsets_need_not_be_monotone
     predicted = calibrator.predict_quantiles(_frame([0.0] * 5))
     assert (predicted["0.5"] <= predicted["0.9"]).all()
     assert predicted["0.9"].to_numpy() == pytest.approx([590.0] * 5)
-
-
-def test_the_scale_floor_keeps_a_zero_prediction_out_of_the_denominator() -> None:
-    """A shut store predicts zero, and an infinity in a pooled quantile is not a number."""
-    assert SCALE_FLOOR > 0.0
 
 
 def test_asking_for_quantiles_before_fitting_is_an_error_rather_than_an_empty_frame() -> None:
