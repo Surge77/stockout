@@ -52,6 +52,7 @@ _FRONTIER_FORMATS: dict[str, str] = {
     "fill_rate": "{:.4f}",
     "cycle_service_level": "{:.3f}",
     "holding_cost": "{:,.0f}",
+    "transit_cost": "{:,.0f}",
     "shortage_cost": "{:,.0f}",
     "total_cost": "{:,.0f}",
     "mean_on_hand": "{:,.0f}",
@@ -109,6 +110,64 @@ def calibration_to_markdown(table: pd.DataFrame, *, model_name: str) -> str:
         [[str(v) for v in row] for row in display.itertuples(index=False)],
     )
     return f"{header}\n\n{body}\n\n{_worst_miss_line(table)}\n"
+
+
+def conditional_coverage_to_markdown(table: pd.DataFrame, *, model_name: str) -> str:
+    """Coverage per group and per level, with the worst single cell named outright.
+
+    A grid rather than a list, because the question a reader has is "is any group badly
+    covered", and the answer is a cell rather than a row. `rows` sits next to the segment
+    name so a gap resting on three observations is discountable on sight — a conditional
+    table without its row counts invites exactly the over-reading it exists to prevent.
+
+    Takes the long form `metrics.coverage_by_segment` returns. ADR 0012.
+    """
+    if table.empty:
+        return f"No segment could be scored for `{model_name}`."
+
+    levels = list(dict.fromkeys(table["quantile"]))
+    headers = ["segment", "rows", *(f"{level:.2f}" for level in levels)]
+
+    rows = []
+    for name, group in table.groupby("segment", sort=False):
+        gaps = dict(zip(group["quantile"], group["gap"], strict=True))
+        rows.append(
+            [
+                str(name),
+                f"{int(group['rows'].iloc[0]):,}",
+                *(f"{gaps[level]:+.3f}" if level in gaps else "—" for level in levels),
+            ]
+        )
+
+    header = f"### `{model_name}` — coverage gap by segment"
+    body = _markdown_table(headers, rows)
+    return f"{header}\n\n{body}\n\n{_worst_group_line(table)}\n"
+
+
+def _worst_group_line(table: pd.DataFrame) -> str:
+    """The single worst segment-and-level cell in the grid.
+
+    Signed and absolute for the same reason `_worst_miss_line` is: under-covering costs a
+    sale and over-covering costs holding, and the largest miss in either direction is the
+    one a reader should leave with. Non-finite gaps are dropped rather than ranked — a NaN
+    is not a large gap, and `argmax` over an array containing one still returns an index.
+    """
+    gaps = table["gap"].to_numpy(dtype="float64")
+    finite = np.flatnonzero(np.isfinite(gaps))
+    if finite.size == 0:
+        return "**No segment could be scored** — no finite coverage gap in the table."
+
+    worst = int(finite[np.abs(gaps[finite]).argmax()])
+    segment = table["segment"].to_numpy()[worst]
+    quantile = float(table["quantile"].to_numpy(dtype="float64")[worst])
+    empirical = float(table["empirical"].to_numpy(dtype="float64")[worst])
+    count = int(table["rows"].to_numpy(dtype="int64")[worst])
+    direction = "under-covers" if gaps[worst] < 0 else "over-covers"
+    return (
+        f"**Worst group `{segment}` at quantile {quantile:.2f}** — {direction} by "
+        f"{abs(gaps[worst]):.3f}, delivering {empirical:.1%} on {count:,} row(s). "
+        f"A marginal table cannot see this."
+    )
 
 
 def _worst_miss_line(table: pd.DataFrame) -> str:

@@ -17,10 +17,9 @@ are neither: variance scales with level and the right tail is longer. Fitting th
 quantile directly makes no distributional assumption, and its calibration is measurable.
 Recorded in ADR 0007.
 
-**Why `fit` keeps the training frame.** Every lag here is at least one horizon long, so
-the features for a 42-day test window resolve entirely into training history — that is
-the whole point of the leakage guard, and it means `predict` cannot build a feature row
-from the future frame alone. It needs the history that sits behind it.
+The design matrix, the retained history and the leakage guards live in `design.py`. What
+is here is the objective, the number of rounds, and what to do when six boosters disagree
+about a spread.
 
 LightGBM is imported at call time, not at module import time: `pip install -e .` without
 the `gbm` extra must still construct these classes, list them in the CLI, and run the
@@ -35,38 +34,26 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from ..data import schemas as s
 from ..errors import BacktestError, MissingDependencyError
-from ..features.build import build_features, feature_columns
-from .base import open_rows, zero_when_closed
+from .base import zero_when_closed
+from .design import DEFAULT_PARAMS, GbmDesign
 
 if TYPE_CHECKING:
     import lightgbm as lgb
+
+__all__ = [
+    "DEFAULT_NUM_BOOST_ROUND",
+    "DEFAULT_PARAMS",
+    "DEFAULT_QUANTILES",
+    "GbmForecaster",
+    "GbmQuantileForecaster",
+]
 
 #: The service-level quantiles worth fitting. 0.5 is the median point forecast; the rest
 #: bracket the newsvendor critical ratios that realistic cost pairs produce. 0.75 is the
 #: ratio the *default* cost pair produces, and it is on the grid so that the frontier can
 #: price the derived target itself rather than the nearest round number to it.
 DEFAULT_QUANTILES: tuple[float, ...] = (0.5, 0.75, 0.8, 0.9, 0.95, 0.99)
-
-#: `seed` here is a seeded *sampler* — row and column subsampling inside boosting — and
-#: not a seeded *split*. The distinction is the one `tests/test_no_random_splits.py`
-#: exists to police: randomness that changes which rows a tree sees is fine, randomness
-#: that decides which rows are training and which are testing is not.
-DEFAULT_PARAMS: dict[str, object] = {
-    "objective": "tweedie",
-    "tweedie_variance_power": 1.2,
-    "learning_rate": 0.05,
-    "num_leaves": 63,
-    "min_data_in_leaf": 100,
-    "feature_fraction": 0.8,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 1,
-    "verbosity": -1,
-    "seed": 7,
-    "deterministic": True,
-    "force_row_wise": True,
-}
 
 DEFAULT_NUM_BOOST_ROUND = 800
 
@@ -84,79 +71,7 @@ def _lightgbm() -> Any:
     return lightgbm
 
 
-class _GbmBase:
-    """Feature plumbing shared by the point and quantile forecasters."""
-
-    name = "gbm_base"
-
-    def __init__(self, *, horizon: int, params: dict[str, object] | None = None) -> None:
-        if horizon < 1:
-            raise ValueError("horizon must be at least 1 day")
-        self.horizon = horizon
-        self.params: dict[str, Any] = dict(DEFAULT_PARAMS if params is None else params)
-        self._history = pd.DataFrame()
-        self._features: list[str] = []
-
-    @property
-    def features(self) -> list[str]:
-        """The columns the model was fitted on, in the order it expects them."""
-        return list(self._features)
-
-    def _training_matrix(self, train: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-        """Design matrix and target, restricted to trading days with defined lags.
-
-        Closed days are dropped for the same reason the baselines drop them: a zero on a
-        shut Sunday is not a demand observation, and averaging it in drags every level
-        estimate down by roughly a seventh. `zero_when_closed` puts the zeros back at
-        prediction time, where they belong.
-        """
-        self._history = train.copy()
-        matrix = build_features(train, horizon=self.horizon)
-        usable = open_rows(matrix).dropna(subset=_lag_columns(matrix))
-        if usable.empty:
-            raise BacktestError(
-                f"no training row has a defined lag at horizon {self.horizon}; the "
-                "training window is shorter than the lags it implies"
-            )
-        self._features = feature_columns(usable)
-        return usable[self._features], usable[s.SALES]
-
-    def _future_matrix(self, future: pd.DataFrame) -> pd.DataFrame:
-        """Feature rows for `future`, built against the retained training history.
-
-        Rows already present in history keep their observed `sales` so that *later*
-        rows can lag them. Rows the model has not seen get a NaN target: the protocol
-        says a future frame's `sales` column must be treated as absent, and it is only
-        there because slicing a frame keeps every column.
-
-        Private, and reached only after a caller has checked that a fit happened.
-        """
-        keys = pd.MultiIndex.from_frame(future[list(s.KEY_COLUMNS)])
-        known = pd.MultiIndex.from_frame(self._history[list(s.KEY_COLUMNS)])
-
-        unseen = future.loc[~np.asarray(keys.isin(known))].reindex(
-            columns=self._history.columns
-        )
-        unseen = unseen.assign(**{s.SALES: np.nan})
-
-        combined = pd.concat([self._history, unseen], ignore_index=True)
-        combined = combined.sort_values(list(s.KEY_COLUMNS)).reset_index(drop=True)
-
-        matrix = build_features(combined, horizon=self.horizon)
-        # Located rather than reindexed: `store` is itself a feature, so the key columns
-        # have to stay in the frame instead of moving into the index. Every key resolves
-        # by construction — `combined` is the history plus exactly the rows that were
-        # missing from it.
-        positions = pd.MultiIndex.from_frame(matrix[list(s.KEY_COLUMNS)]).get_indexer(keys)
-        return matrix.iloc[positions][self._features]
-
-    def _predict_with(self, booster: lgb.Booster, future: pd.DataFrame) -> pd.Series:
-        raw = np.asarray(booster.predict(self._future_matrix(future)), dtype="float64")
-        values = pd.Series(raw, index=future.index).clip(lower=0.0)
-        return zero_when_closed(values, future)
-
-
-class GbmForecaster(_GbmBase):
+class GbmForecaster(GbmDesign):
     """LightGBM point forecaster over the horizon-aware feature matrix."""
 
     name = "gbm"
@@ -190,7 +105,7 @@ class GbmForecaster(_GbmBase):
         return self._predict_with(self._booster, future)
 
 
-class GbmQuantileForecaster(_GbmBase):
+class GbmQuantileForecaster(GbmDesign):
     """One LightGBM model per quantile, sharing a feature matrix.
 
     Quantile crossing (the 0.8 prediction landing above the 0.9) is expected at the
@@ -227,8 +142,24 @@ class GbmQuantileForecaster(_GbmBase):
         self._boosters: dict[float, lgb.Booster] = {}
 
     def fit(self, train: pd.DataFrame) -> GbmQuantileForecaster:
+        return self._fit(train, history=None)
+
+    def fit_within(
+        self, train: pd.DataFrame, *, history: pd.DataFrame
+    ) -> GbmQuantileForecaster:
+        """Boost on `train`'s rows while lagging against the whole of `history`.
+
+        The one caller is conformal calibration in its no-refit mode: a model that has
+        never trained on the calibration window still has to build features across it,
+        because a test row's lag lands inside those days. ADR 0013.
+        """
+        return self._fit(train, history=history)
+
+    def _fit(
+        self, train: pd.DataFrame, *, history: pd.DataFrame | None
+    ) -> GbmQuantileForecaster:
         lightgbm = _lightgbm()
-        design, target = self._training_matrix(train)
+        design, target = self._training_matrix(train, history=history)
         self._boosters = {}
         for quantile in self.quantiles:
             # A fresh Dataset per quantile: LightGBM binds construction parameters to a
@@ -252,6 +183,9 @@ class GbmQuantileForecaster(_GbmBase):
         if not self._boosters:
             raise BacktestError("predict_quantiles() was called before fit()")
 
+        # Built once and shared across the six boosters. Calling `_predict_with` per
+        # quantile would rebuild the same matrix six times, and building it means
+        # re-deriving every lag over the whole retained history.
         design = self._future_matrix(future)
         columns = {
             _label(quantile): zero_when_closed(
@@ -275,11 +209,6 @@ class GbmQuantileForecaster(_GbmBase):
 def _label(quantile: float) -> str:
     """Column name for a quantile. `0.9` is a better column header than `q90`."""
     return str(quantile)
-
-
-def _lag_columns(matrix: pd.DataFrame) -> list[str]:
-    prefix = f"{s.SALES}_lag_"
-    return [column for column in matrix.columns if column.startswith(prefix)]
 
 
 def _quantile_params(base: dict[str, Any], quantile: float) -> dict[str, Any]:

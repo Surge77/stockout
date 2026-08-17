@@ -9,10 +9,10 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from stockout.inventory.simulate import SimulationResult, frontier, simulate
+from stockout.inventory.simulate import SimulationResult, simulate
 
 
-def test_the_result_totals_its_two_cost_components() -> None:
+def test_the_result_totals_its_three_cost_components() -> None:
     """The dataclass fixes the shape of the answer before the answer exists."""
     result = SimulationResult(
         fill_rate=0.95,
@@ -21,7 +21,22 @@ def test_the_result_totals_its_two_cost_components() -> None:
         holding_cost=120.0,
         shortage_cost=45.0,
         mean_on_hand=210.0,
+        transit_cost=30.0,
     )
+    assert result.total_cost == pytest.approx(195.0)
+
+
+def test_a_result_with_no_pipeline_costs_nothing_to_carry_one() -> None:
+    """The default keeps every pre-pipeline number in this repository arithmetically intact."""
+    result = SimulationResult(
+        fill_rate=0.95,
+        cycle_service_level=0.8,
+        stockout_days=3,
+        holding_cost=120.0,
+        shortage_cost=45.0,
+        mean_on_hand=210.0,
+    )
+    assert result.transit_cost == pytest.approx(0.0)
     assert result.total_cost == pytest.approx(165.0)
 
 
@@ -44,12 +59,6 @@ def test_unmet_demand_is_lost_rather_than_backordered() -> None:
 def test_a_perfect_forecast_with_ample_stock_never_stocks_out() -> None:
     demand = pd.Series([100.0] * 30)
     assert simulate(demand, pd.Series([100.0] * 30), initial_stock=1000.0).stockout_days == 0
-
-
-def test_the_frontier_returns_one_row_per_service_level() -> None:
-    demand = pd.Series([100.0] * 60)
-    quantiles = pd.DataFrame({"0.5": [100.0] * 60, "0.9": [130.0] * 60})
-    assert len(frontier(demand, quantiles)) == 2
 
 
 def test_shortage_cost_prices_the_shortfall_and_holding_prices_what_is_left() -> None:
@@ -104,43 +113,6 @@ def test_negative_demand_is_rejected_rather_than_treated_as_a_return() -> None:
 def test_demand_and_levels_must_describe_the_same_days() -> None:
     with pytest.raises(ValueError, match="same length"):
         simulate(pd.Series([1.0, 2.0]), pd.Series([1.0]))
-
-
-def test_the_frontier_needs_something_to_price() -> None:
-    with pytest.raises(ValueError, match="no quantile forecasts"):
-        frontier(pd.Series([1.0]), pd.DataFrame(index=[0]))
-
-
-def test_the_frontier_reads_its_quantile_out_of_the_column_label() -> None:
-    """`0.9` plots against the x axis; a label that is not a number becomes NaN, not a crash."""
-    demand = pd.Series([100.0] * 14)
-    table = frontier(demand, pd.DataFrame({"0.9": [130.0] * 14, "mean": [100.0] * 14}))
-    assert table["quantile"].iloc[0] == pytest.approx(0.9)
-    assert pd.isna(table["quantile"].iloc[1])
-
-
-def test_the_frontier_stocks_to_the_forecast_itself_not_to_a_multi_day_cover() -> None:
-    """Guards the mistake that flattened the first frontier this repo produced.
-
-    A base-stock level sized to survive a lead time, refilled every day, is permanent
-    overstock: every service level saturates at a fill rate of 1.0 and there is no
-    trade-off left to plot. Stocking to the day's own quantile is what makes the curve
-    a curve.
-    """
-    demand = pd.Series([100.0] * 30)
-    table = frontier(demand, pd.DataFrame({"0.5": [50.0] * 30}))
-    assert table["fill_rate"].iloc[0] == pytest.approx(0.5)
-
-
-def test_a_higher_quantile_buys_fill_rate_with_carried_stock() -> None:
-    """The frontier read as it is meant to be: better service, more stock, both monotone."""
-    demand = pd.Series([100.0] * 60)
-    quantiles = pd.DataFrame({"0.5": [90.0] * 60, "0.9": [120.0] * 60})
-    table = frontier(demand, quantiles, review_period_days=1)
-
-    assert table["fill_rate"].is_monotonic_increasing
-    assert table["mean_on_hand"].is_monotonic_increasing
-    assert table["shortage_cost"].is_monotonic_decreasing
 
 
 # --- the delivery pipeline (ADR 0010) -------------------------------------------------
@@ -199,36 +171,78 @@ def test_a_single_day_level_under_a_multi_day_wait_starves_the_shelf() -> None:
 def test_a_negative_lead_time_is_rejected_rather_than_read_as_early_delivery() -> None:
     with pytest.raises(ValueError, match="lead time cannot be negative"):
         simulate(pd.Series([1.0]), pd.Series([1.0]), lead_time_days=-1)
-    with pytest.raises(ValueError, match="lead time cannot be negative"):
-        frontier(pd.Series([1.0]), pd.DataFrame({"0.9": [1.0]}), lead_time_days=-1)
 
 
-def test_the_frontier_sizes_across_the_protection_interval_once_deliveries_take_time() -> None:
-    """A lead time must move the level too, or the shelf starves for the wrong reason.
+# --- what the pipeline costs to carry (ADR 0011) --------------------------------------
 
-    Stocking to a single day's quantile under a seven-day wait would leave every service
-    level short; summing the quantile across the protection interval is what makes the
-    curve a curve again.
+
+def test_without_a_lead_time_carrying_the_pipeline_costs_nothing() -> None:
+    """Nothing is ever in transit under instant delivery, so the new term cannot bite.
+
+    This is what makes ADR 0011 safe to turn on by default: every frontier this
+    repository has already published was priced at `lead_time_days=0`.
     """
-    demand = pd.Series([100.0] * 60)
-    quantiles = pd.DataFrame({"0.5": [90.0] * 60, "0.9": [120.0] * 60})
-    table = frontier(demand, quantiles, lead_time_days=7, review_period_days=1)
-
-    assert (table["mean_on_order"] > 0.0).all()
-    assert table["fill_rate"].is_monotonic_increasing
-    assert table["fill_rate"].iloc[0] < 1.0
+    result = simulate(pd.Series([100.0] * 10), pd.Series([120.0] * 10))
+    assert result.transit_cost == pytest.approx(0.0)
+    assert result.total_cost == pytest.approx(result.holding_cost + result.shortage_cost)
 
 
-def test_a_pipeline_opens_in_steady_state_rather_than_on_an_empty_shelf() -> None:
-    """Charging a policy for the warehouse having been built yesterday measures nothing.
+def test_stock_on_a_lorry_is_charged_at_the_on_hand_rate_by_default() -> None:
+    """Hand-checkable, and the same fixture as the bullwhip guard above.
 
-    With an explicitly empty opening shelf the first week is lost outright; with the
-    default the same policy is judged on the days it actually controls.
+    Ten quiet days, a level of 100, a three-day wait. One order of 100 is placed on day
+    one and sits in transit for three days: 300 unit-days in the pipeline at a holding
+    rate of 1, so 300. It lands on day four and then sits on the shelf for seven days:
+    700 unit-days on hand, so 700. Nothing is ever short.
     """
-    demand = pd.Series([100.0] * 60)
-    quantiles = pd.DataFrame({"0.9": [120.0] * 60})
+    result = simulate(
+        pd.Series([0.0] * 10), pd.Series([100.0] * 10), lead_time_days=3, review_period_days=1
+    )
+    assert result.transit_cost == pytest.approx(300.0)
+    assert result.holding_cost == pytest.approx(700.0)
+    assert result.shortage_cost == pytest.approx(0.0)
+    assert result.total_cost == pytest.approx(1000.0)
 
-    warm = frontier(demand, quantiles, lead_time_days=7, review_period_days=1)
-    cold = frontier(demand, quantiles, lead_time_days=7, review_period_days=1, initial_stock=0.0)
 
-    assert cold["stockout_days"].iloc[0] > warm["stockout_days"].iloc[0]
+def test_a_supplier_owned_pipeline_can_be_made_free_without_touching_the_shelf() -> None:
+    """FOB destination: the goods are the supplier's until they land, so nothing is owed.
+
+    The point of the explicit zero is that it reproduces the pre-ADR-0011 arithmetic
+    exactly rather than approximately — and that the on-hand column does not move when
+    the transit rate does, because a charge folded into `holding_cost` would be
+    unauditable.
+    """
+    charged = simulate(
+        pd.Series([0.0] * 10), pd.Series([100.0] * 10), lead_time_days=3, review_period_days=1
+    )
+    free = simulate(
+        pd.Series([0.0] * 10),
+        pd.Series([100.0] * 10),
+        lead_time_days=3,
+        review_period_days=1,
+        transit_holding_cost=0.0,
+    )
+    assert free.transit_cost == pytest.approx(0.0)
+    assert free.holding_cost == pytest.approx(charged.holding_cost)
+    assert free.total_cost < charged.total_cost
+
+
+def test_the_transit_rate_is_independent_of_the_on_hand_rate() -> None:
+    """Capital cost and warehouse cost are different numbers, so they take two arguments."""
+    result = simulate(
+        pd.Series([0.0] * 10),
+        pd.Series([100.0] * 10),
+        lead_time_days=3,
+        review_period_days=1,
+        holding_cost=2.0,
+        transit_holding_cost=0.5,
+    )
+    assert result.holding_cost == pytest.approx(1400.0)
+    assert result.transit_cost == pytest.approx(150.0)
+
+
+def test_a_negative_transit_rate_is_rejected_rather_than_read_as_a_subsidy() -> None:
+    with pytest.raises(ValueError, match="transit holding cost cannot be negative"):
+        simulate(
+            pd.Series([1.0]), pd.Series([1.0]), lead_time_days=1, transit_holding_cost=-1.0
+        )

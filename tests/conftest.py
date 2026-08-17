@@ -9,11 +9,73 @@ say so with `@pytest.mark.integration`, which is excluded from the default run.
 from __future__ import annotations
 
 import socket
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from stockout.data import schemas as s
+from stockout.data.loaders import write_sales
 from stockout.data.synth import make_sales
+from stockout.models.conformal import ConformalQuantileForecaster
+
+CALIBRATION_HORIZON = 42
+
+
+class FlatQuantileModel:
+    """Predicts the same number for every row, whatever it is fitted on.
+
+    Useless as a forecaster and ideal as a fixture: the residual for every row is
+    `sales - constant`, so the offset a correct implementation must produce can be
+    computed by hand from the fixture's own sales column.
+
+    Lives here rather than in one test module because three of them need it — the
+    marginal correction, the grouped one and the un-refitted one — which is the point at
+    which the duplication stops being cheaper than the import.
+    """
+
+    name = "flat"
+
+    def __init__(self, *, levels: dict[str, float]) -> None:
+        self.levels = levels
+        self.quantiles = tuple(float(q) for q in levels)
+        self.crossing_rate = 0.0
+        self.fitted_rows = 0
+
+    def fit(self, train: pd.DataFrame) -> FlatQuantileModel:
+        self.fitted_rows = len(train)
+        return self
+
+    def predict(self, future: pd.DataFrame) -> pd.Series:
+        return pd.Series(1.0, index=future.index)
+
+    def predict_quantiles(self, future: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {name: pd.Series(value, index=future.index) for name, value in self.levels.items()},
+            index=future.index,
+        )
+
+
+def flat_calibrator(**levels: float) -> ConformalQuantileForecaster:
+    """A calibrator wrapping a flat model, with a scale of 1 so offsets read directly."""
+    return ConformalQuantileForecaster(
+        horizon=CALIBRATION_HORIZON,
+        calibration_days=10,
+        factory=lambda: FlatQuantileModel(levels=levels),
+    )
+
+
+def one_store_frame(sales: list[float], *, open_flags: list[int] | None = None) -> pd.DataFrame:
+    """One store, consecutive days, with `sales` as given."""
+    flags = [1] * len(sales) if open_flags is None else open_flags
+    return pd.DataFrame(
+        {
+            s.DATE: pd.date_range("2024-01-01", periods=len(sales), freq="D"),
+            s.STORE: 1,
+            s.SALES: sales,
+            s.OPEN: flags,
+        }
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +101,17 @@ def sales() -> pd.DataFrame:
     which is the layout the CLI defaults to.
     """
     return make_sales(n_stores=3, days=730, seed=11)
+
+
+@pytest.fixture
+def data_file(tmp_path: Path) -> Path:
+    """A written CSV for the CLI tests, which take a path rather than a frame.
+
+    Two stores on purpose: it is the smallest file that exercises per-store behaviour, and
+    it is small enough that its ~70 calibration rows trip the saturation warning — a
+    warning is worth nothing if it only fires when it is not needed.
+    """
+    return write_sales(make_sales(n_stores=2, days=730, seed=13), tmp_path / "sales.csv")
 
 
 @pytest.fixture

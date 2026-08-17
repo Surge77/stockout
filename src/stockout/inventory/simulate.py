@@ -5,10 +5,8 @@ carousel. A forecast is not good because its WMAPE is low; it is good because st
 it loses less money than stocking to the alternative. Those are different orderings, and
 a forecast can win on the first and lose on the second.
 
-**The deliverable.** Run the simulator across a sweep of target service levels for each
-forecaster, and plot cost against fill rate. Three curves — seasonal-naive, GBM point
-with a normal safety stock, GBM quantile — on one efficient-frontier chart. Whichever
-curve sits below and to the right wins, and the chart is the argument.
+Pricing a *sweep* of service levels is `frontier`'s job, one module over. This one walks
+a single policy forward and says what it cost.
 
 **What is simulated by default is a repeated newsvendor.** Stock is raised to the
 order-up-to level at the start of every day, demand arrives, and whatever was not served
@@ -26,6 +24,11 @@ level sized across the protection interval, and `frontier` builds one with
 this repository walked into once: a level sized to survive a wait, refilled daily by an
 instant delivery, is permanent overstock, and every service level saturates at a fill rate
 of 1.0 with no trade-off left to see. ADR 0010 records the pipeline and what it costs.
+
+**The pipeline is charged for.** Goods on a lorry are committed capital earning nothing, so
+`transit_holding_cost` bills them by default at the same rate as the shelf. On a seven-day
+lead time the lorry carries roughly eight times what the shop does, so leaving it free was
+never a rounding error — ADR 0011, which also explains why charging it moves no ranking.
 
 **The honesty note that must survive into the README.** Rossmann records store-level
 revenue, not SKU units, and has no inventory column at all. Demand and stock here are
@@ -47,19 +50,6 @@ from ..config import (
     DEFAULT_REVIEW_PERIOD_DAYS,
     DEFAULT_UNDERAGE_COST,
 )
-from .policy import order_up_to_level
-
-FRONTIER_COLUMNS: tuple[str, ...] = (
-    "quantile",
-    "fill_rate",
-    "cycle_service_level",
-    "stockout_days",
-    "holding_cost",
-    "shortage_cost",
-    "total_cost",
-    "mean_on_hand",
-    "mean_on_order",
-)
 
 
 @dataclass(frozen=True)
@@ -80,9 +70,14 @@ class SimulationResult:
     mean_on_order: float = 0.0
     """Mean stock in transit. Zero without a lead time, and the evidence of one with it."""
 
+    transit_cost: float = 0.0
+    """What carrying the pipeline cost. Defaulted, and therefore listed after the fields
+    that are not, which is the one place this dataclass reads out of order: it belongs
+    beside `holding_cost` and cannot sit there. Zero without a lead time — ADR 0011."""
+
     @property
     def total_cost(self) -> float:
-        return self.holding_cost + self.shortage_cost
+        return self.holding_cost + self.transit_cost + self.shortage_cost
 
 
 def simulate(
@@ -94,10 +89,11 @@ def simulate(
     initial_stock: float = 0.0,
     holding_cost: float = DEFAULT_OVERAGE_COST,
     shortage_cost: float = DEFAULT_UNDERAGE_COST,
+    transit_holding_cost: float | None = None,
 ) -> SimulationResult:
     """Walk the inventory forward day by day under an order-up-to policy.
 
-    Three modelling decisions, made explicitly:
+    Four modelling decisions, made explicitly:
 
     1. **Unmet demand is lost, not backordered.** Retail walk-outs do not queue, so a
        shortfall never reappears as tomorrow's demand. Shortage cost is therefore a
@@ -112,9 +108,16 @@ def simulate(
        lead time to open the pipeline and price an `(R, S)` system instead — ADR 0010,
        and note that `order_up_to` must then be a *protection-interval* level rather than
        one day's quantile, or the shelf will be permanently short.
+    4. **Stock in transit is charged for.** Goods on a lorry are capital already
+       committed that is earning nothing, so `transit_holding_cost` defaults to the
+       on-hand rate rather than to zero. Pass `0.0` for a supplier-owned pipeline, where
+       the goods are not yours until they land. ADR 0011, and note it can only bite when
+       there is a lead time to create a pipeline in the first place.
 
-    Costs are per unit: `holding_cost` for each unit still on the shelf at the end of a
-    day, `shortage_cost` for each unit of demand that walked out unserved.
+    Costs are per unit per day: `holding_cost` for each unit still on the shelf at the
+    end of a day, `transit_holding_cost` for each unit still on the water, and
+    `shortage_cost` — once, not per day — for each unit of demand that walked out
+    unserved.
     """
     if len(demand) != len(order_up_to):
         raise ValueError("demand and order-up-to levels must be the same length")
@@ -124,6 +127,15 @@ def simulate(
         raise ValueError("review period must be at least 1 day")
     if initial_stock < 0:
         raise ValueError("initial stock cannot be negative")
+    if transit_holding_cost is not None and transit_holding_cost < 0:
+        raise ValueError("transit holding cost cannot be negative")
+
+    # None means "the same as the shelf", which is an upper bound on the true financing
+    # cost rather than an estimate of it: on-hand also buys warehouse space, insurance and
+    # shrinkage, and a lorry buys none of those. The honest alternatives were this or a
+    # fraction picked out of the air, and a magic constant with a story attached is what
+    # ADR 0009 already refused once.
+    transit_rate = holding_cost if transit_holding_cost is None else transit_holding_cost
 
     wanted = demand.to_numpy(dtype="float64")
     levels = order_up_to.to_numpy(dtype="float64")
@@ -136,7 +148,7 @@ def simulate(
     arrivals = np.zeros(len(wanted) + lead_time_days + 1, dtype="float64")
     on_hand = float(initial_stock)
     on_order = 0.0
-    served_total = holding_total = shortage_total = 0.0
+    served_total = holding_total = shortage_total = transit_total = 0.0
     end_of_day: list[float] = []
     in_transit: list[float] = []
     was_short: list[bool] = []
@@ -159,6 +171,9 @@ def simulate(
 
         served_total += served
         holding_total += on_hand * holding_cost
+        # Charged on what is still on the water at the end of the day, which is the same
+        # instant the shelf is charged on. An order placed today is in transit today.
+        transit_total += on_order * transit_rate
         shortage_total += shortfall * shortage_cost
         end_of_day.append(on_hand)
         in_transit.append(on_order)
@@ -175,94 +190,8 @@ def simulate(
         shortage_cost=shortage_total,
         mean_on_hand=float(np.mean(end_of_day)) if end_of_day else 0.0,
         mean_on_order=float(np.mean(in_transit)) if in_transit else 0.0,
+        transit_cost=transit_total,
     )
-
-
-def frontier(
-    demand: pd.Series,
-    quantile_forecasts: pd.DataFrame,
-    *,
-    lead_time_days: int = 0,
-    review_period_days: int = DEFAULT_REVIEW_PERIOD_DAYS,
-    initial_stock: float | None = None,
-    holding_cost: float = DEFAULT_OVERAGE_COST,
-    shortage_cost: float = DEFAULT_UNDERAGE_COST,
-) -> pd.DataFrame:
-    """Cost and fill rate at each target service level, for the efficient-frontier plot.
-
-    One row per column of `quantile_forecasts`, in the order the columns arrive.
-
-    Without a lead time each column is that day's demand quantile and is stocked to
-    directly, because the decision being priced is a single-period one. With one, the
-    same column is summed forward across the protection interval by
-    `policy.order_up_to_level` and the loop opens a delivery pipeline — the two changes
-    belong together, and applying either alone is the mistake ADR 0008 documents.
-
-    The review period for *sizing* is one day, because this loop reviews daily. The
-    `review_period_days` argument groups days into cycles for `cycle_service_level` and
-    still does not change what is ordered.
-
-    `initial_stock` defaults to opening in steady state: nothing when deliveries are
-    instant, and the first day's base-stock level when they are not. A pipeline that
-    starts empty guarantees a stockout on every day before the first lorry arrives, and
-    charging a policy for the warehouse having been built yesterday measures the opening
-    balance rather than the policy.
-    """
-    if quantile_forecasts.shape[1] == 0:
-        raise ValueError("no quantile forecasts to price")
-    if lead_time_days < 0:
-        raise ValueError("lead time cannot be negative")
-
-    rows = []
-    for name in quantile_forecasts.columns:
-        levels = _levels_for(quantile_forecasts[name], lead_time_days=lead_time_days)
-        opening = _opening_stock(levels, initial_stock, lead_time_days=lead_time_days)
-        result = simulate(
-            demand,
-            levels,
-            lead_time_days=lead_time_days,
-            review_period_days=review_period_days,
-            initial_stock=opening,
-            holding_cost=holding_cost,
-            shortage_cost=shortage_cost,
-        )
-        rows.append(
-            {
-                "quantile": _as_quantile(name),
-                "fill_rate": result.fill_rate,
-                "cycle_service_level": result.cycle_service_level,
-                "stockout_days": result.stockout_days,
-                "holding_cost": result.holding_cost,
-                "shortage_cost": result.shortage_cost,
-                "total_cost": result.total_cost,
-                "mean_on_hand": result.mean_on_hand,
-                "mean_on_order": result.mean_on_order,
-            }
-        )
-    return pd.DataFrame(rows, columns=list(FRONTIER_COLUMNS))
-
-
-def _levels_for(forecast: pd.Series, *, lead_time_days: int) -> pd.Series:
-    """The day's own quantile, or its forward sum across the protection interval."""
-    if lead_time_days == 0:
-        return forecast
-    return order_up_to_level(forecast, lead_time_days=lead_time_days, review_period_days=1)
-
-
-def _opening_stock(
-    levels: pd.Series, initial_stock: float | None, *, lead_time_days: int
-) -> float:
-    """The caller's number, or a shelf that starts where the policy would keep it.
-
-    Only a pipeline needs the warm start. With instant delivery the first day is topped
-    up before demand arrives, so an empty opening shelf costs nothing and saying zero is
-    plainer than saying something that cancels.
-    """
-    if initial_stock is not None:
-        return initial_stock
-    if lead_time_days == 0 or levels.empty:
-        return 0.0
-    return float(levels.iloc[0])
 
 
 def _cycle_service_level(was_short: Sequence[bool], review_period_days: int) -> float:
@@ -276,11 +205,3 @@ def _cycle_service_level(was_short: Sequence[bool], review_period_days: int) -> 
     cycles = range(0, len(was_short), review_period_days)
     clean = sum(not any(was_short[start : start + review_period_days]) for start in cycles)
     return clean / len(cycles)
-
-
-def _as_quantile(name: object) -> float:
-    """Column label back to a number, so the frontier can be plotted against it."""
-    try:
-        return float(str(name))
-    except ValueError:
-        return float("nan")
