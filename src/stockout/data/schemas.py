@@ -19,6 +19,13 @@ STATE_HOLIDAY: Final = "state_holiday"
 SCHOOL_HOLIDAY: Final = "school_holiday"
 DAY_OF_WEEK: Final = "day_of_week"
 
+#: The two derived targets. `demand_class` is a tercile of `sales` and
+#: `demand_class_code` is the same thing as 0/1/2, so both are deterministic
+#: functions of the regression target. They live here rather than in `targets.py`
+#: so that `features/build.py` can refuse them without importing it.
+DEMAND_CLASS: Final = "demand_class"
+DEMAND_CLASS_CODE: Final = "demand_class_code"
+
 # ---------------------------------------------------------------------------
 # store.csv — one row per store, joined on `store`. These are the columns that
 # make the preprocessing pipeline necessary rather than decorative: two are
@@ -147,3 +154,11 @@ STORE_NUMERIC_FEATURES: Final[tuple[str, ...]] = (
 #: predictor of `sales` and nobody knows it six weeks ahead. A model that uses it
 #: scores brilliantly and cannot be deployed. See features/build.py.
 UNAVAILABLE_AT_FORECAST_TIME: Final[frozenset[str]] = frozenset({CUSTOMERS})
+
+#: Never features, in either direction. `sales` is the regression target;
+#: `demand_class_code` is a tercile of it, so handing it to the regressor leaks the
+#: answer, and handing `sales` to the classifier does the same in reverse. Excluding
+#: only "the target of the current task" is not enough — the two targets encode each
+#: other, and the leak is invisible because both columns are legitimately present in
+#: the training frame.
+TARGET_COLUMNS: Final[frozenset[str]] = frozenset({SALES, DEMAND_CLASS, DEMAND_CLASS_CODE})

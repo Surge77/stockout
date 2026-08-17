@@ -33,8 +33,10 @@ from .config import DEMAND_CLASS_LABELS
 from .data import schemas as s
 from .errors import SchemaError
 
-DEMAND_CLASS = "demand_class"
-DEMAND_CLASS_CODE = "demand_class_code"
+#: Re-exported from the schema, which owns them so that `features/build.py` can deny
+#: them as features without importing this module.
+DEMAND_CLASS = s.DEMAND_CLASS
+DEMAND_CLASS_CODE = s.DEMAND_CLASS_CODE
 
 #: Two cut points make three classes. Terciles, so each class holds a third of the
 #: training days for its store — which also means accuracy has a 33% floor rather than

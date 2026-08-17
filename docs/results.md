@@ -14,47 +14,56 @@ Every answer needs three things: **a number**, **the chart or table it came from
 
 ## Machinery, demonstrated
 
-Synthetic sample, 10 stores × 900 days, horizon 7, a 42-day held-out window with a 7-day
-gap. Scored on trading rows only.
-
 ### Regression
 
-| Model | rows fitted | R² | WMAPE | seconds |
-|---|---|---|---|---|
-| `dummy` | 3,277 | −0.000 | 0.296 | 0.1 |
-| `linear` | 3,277 | 0.949 | 0.057 | 0.0 |
-| `ridge` | 3,277 | 0.949 | 0.057 | 0.0 |
-| `lasso` | 3,277 | 0.947 | 0.058 | 0.1 |
-| `elastic_net` | 3,277 | 0.917 | 0.067 | 0.0 |
-| `polynomial` | 3,277 | 0.954 | 0.054 | 0.2 |
-| `decision_tree` | 3,277 | 0.936 | 0.065 | 0.1 |
-| `bagging` | 3,277 | 0.944 | 0.061 | 3.0 |
-| `random_forest` | 3,277 | 0.944 | 0.061 | 0.3 |
-| `hist_gradient_boosting` | 3,277 | **0.958** | **0.054** | 2.4 |
-| `knn` | 3,277 | 0.904 | 0.080 | 0.2 |
-| `svr` | 3,277 | 0.949 | 0.054 | 0.2 |
+Committed synthetic sample, horizon 7, a 28-day held-out window with a 7-day gap, scored
+on trading rows only. 2,279 training rows, 92 scored.
 
-`dummy` scoring −0.000 is the definition of R² working: it predicts the training mean, and
-R² *is* the improvement on that. Everything else should be read as "and what did the extra
-complexity buy over 0.949", which for most of the table is nothing.
+| Model | R² | WMAPE | MAE | RMSE | seconds |
+|---|---|---|---|---|---|
+| `dummy` | −0.003 | 0.229 | 1,703 | 2,261 | 0.1 |
+| `linear` | 0.835 | 0.090 | 670 | 918 | 0.0 |
+| `ridge` | 0.842 | 0.090 | 669 | 898 | 0.0 |
+| `lasso` | 0.840 | 0.090 | 672 | 904 | 0.1 |
+| `elastic_net` | 0.779 | 0.095 | 708 | 1,060 | 0.0 |
+| `polynomial` | **0.845** | 0.093 | 691 | 888 | 0.2 |
+| `decision_tree` | 0.780 | 0.100 | 748 | 1,058 | 0.0 |
+| `bagging` | 0.823 | 0.095 | 709 | 949 | 4.1 |
+| `random_forest` | 0.823 | 0.095 | 709 | 949 | 0.2 |
+| `hist_gradient_boosting` | 0.843 | 0.091 | 674 | 893 | 2.2 |
+| `knn` | 0.762 | 0.105 | 778 | 1,101 | 0.1 |
+| `svr` | 0.833 | **0.090** | 670 | 923 | 0.2 |
+
+`dummy` scoring −0.003 is the definition of R² working: it predicts the training mean, and
+R² *is* the improvement on that.
+
+The interesting result is that **nothing beats `ridge` by enough to matter.** Four models
+sit between 0.833 and 0.845, one of them a straight line; `bagging` spends 4.1 seconds to
+land below it. On a generator whose structure is multiplicative and whose calendar effects
+are constants, a linear model on the right features is the correct answer, and the honest
+report is that the ensembles bought nothing. Whether that survives on Rossmann is Q2.
 
 ### Classification
 
-| Model | rows fitted | accuracy | macro-F1 | seconds |
-|---|---|---|---|---|
-| `dummy` | 3,277 | 0.338 | 0.168 | 0.0 |
-| `logistic` | 3,277 | 0.738 | 0.742 | 0.3 |
-| `decision_tree` | 3,277 | 0.705 | 0.703 | 0.1 |
-| `bagging` | 3,277 | 0.686 | 0.681 | 0.5 |
-| `random_forest` | 3,277 | 0.686 | 0.681 | 0.3 |
-| `hist_gradient_boosting` | 3,277 | 0.700 | 0.708 | 1.9 |
-| `knn` | 3,277 | 0.695 | 0.696 | 0.1 |
-| `svc` | 3,277 | **0.743** | **0.743** | 0.5 |
-| `linear_svc` | 3,277 | 0.719 | 0.719 | 0.5 |
+| Model | accuracy | macro-F1 | adjacent | recall Low | recall Med | recall High | seconds |
+|---|---|---|---|---|---|---|---|
+| `dummy` | 0.304 | 0.156 | 0.641 | 1.000 | 0.000 | 0.000 | 0.0 |
+| `logistic` | 0.685 | 0.691 | 1.000 | 0.786 | 0.613 | 0.667 | 0.2 |
+| `decision_tree` | 0.576 | 0.579 | 0.989 | 0.821 | 0.516 | 0.424 | 0.1 |
+| `bagging` | 0.565 | 0.567 | 1.000 | 0.821 | 0.548 | 0.364 | 0.4 |
+| `random_forest` | 0.630 | 0.638 | 1.000 | 0.786 | 0.581 | 0.545 | 0.2 |
+| `hist_gradient_boosting` | **0.696** | **0.703** | 1.000 | 0.821 | 0.677 | 0.606 | 1.8 |
+| `knn` | 0.620 | 0.624 | 0.967 | 0.786 | 0.581 | 0.515 | 0.1 |
+| `svc` | 0.674 | 0.677 | 1.000 | 0.893 | 0.677 | 0.485 | 0.2 |
+| `linear_svc` | 0.674 | 0.677 | 1.000 | 0.857 | 0.548 | 0.636 | 0.2 |
 
-`dummy` at 0.338 is the three-class floor, and it is the reason 0.743 can be read at all.
-Note that the linear models win both halves here — on a generator whose structure is
-multiplicative and whose calendar effects are constants, that is what should happen.
+`dummy` at 0.304 accuracy and 0.156 macro-F1 is the floor, and the gap between those two
+numbers is the argument for reporting both: predicting Low every time is right 30% of the
+time and has a recall of 1.000 on Low and 0.000 on everything else. Accuracy alone would
+call that a third of a model. Macro-F1 calls it a sixth.
+
+Every real model scores `adjacent` at or near 1.000 — when they are wrong they are wrong
+by one class, never by two. That is worth knowing and no standard metric reports it.
 
 ### Class balance drifts, and that is the finding
 
@@ -70,6 +79,33 @@ class-weighted.
 ---
 
 ## What didn't work
+
+### The regressor was reading its own answer
+
+`demand_class_code` is a tercile of `sales`. `feature_columns` admitted it because it is
+numeric and was not the *current* task's target, so every regression model in this project
+was handed a three-way summary of the number it was predicting.
+
+Found by the serving path rather than by a test: `predict` builds a future row with no
+label on it, the fitted pipeline asked for a column that was not there, and sklearn said
+`columns are missing: {'demand_class_code'}`. A leak that improves a score is invisible; a
+leak that breaks an unrelated code path is not, which is the only reason this one surfaced.
+
+What it was worth:
+
+| Model | R² leaked | R² clean | WMAPE leaked | WMAPE clean |
+|---|---|---|---|---|
+| `ridge` | 0.887 | 0.842 | 0.068 | 0.090 |
+| `hist_gradient_boosting` | 0.900 | 0.843 | 0.067 | 0.091 |
+
+About 0.05 of R² and a quarter of WMAPE. Every regression figure published before this
+correction was inflated by it.
+
+The fix is at the schema level rather than at the call site. `schemas.TARGET_COLUMNS` names
+all three of `sales`, `demand_class` and `demand_class_code`, and `FEATURE_DENYLIST` refuses
+the set — because excluding "the target of this task" is not enough when two targets encode
+each other.
+
 
 ### The leakage decomposition shows nothing, and the reason is structural
 

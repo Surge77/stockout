@@ -22,7 +22,7 @@ from .lags import add_lags, add_rolling, seasonal_lags
 #: Never a feature: the target itself, the date it is indexed by, the raw categorical
 #: string replaced by `is_state_holiday`, and anything unknown at the forecast origin.
 FEATURE_DENYLIST: frozenset[str] = frozenset(
-    {s.SALES, s.DATE, s.STATE_HOLIDAY} | set(s.UNAVAILABLE_AT_FORECAST_TIME)
+    {s.DATE, s.STATE_HOLIDAY} | set(s.TARGET_COLUMNS) | set(s.UNAVAILABLE_AT_FORECAST_TIME)
 )
 
 DEFAULT_ROLLING_WINDOWS: tuple[int, ...] = (7, 28, 91)

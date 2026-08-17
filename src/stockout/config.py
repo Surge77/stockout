@@ -20,6 +20,12 @@ REPORTS_DIR = _ROOT / "reports"
 SAMPLE_PATH = DATA_DIR / "sample_sales.csv"
 SAMPLE_STORES_PATH = DATA_DIR / "sample_stores.csv"
 
+#: Where trained models and the prepared-frame cache land. Both are build output, both
+#: are gitignored, and `persistence.load` refuses to read a model from anywhere else —
+#: loading a joblib file runs code from it, so the path is not a free parameter.
+ARTIFACT_DIR = _ROOT / "artifacts"
+PREPARED_CACHE = ARTIFACT_DIR / "prepared.parquet"
+
 KAGGLE_COMPETITION = "rossmann-store-sales"
 
 # One week. A supplier reorders weekly, so this is the horizon the business actually
