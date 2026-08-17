@@ -5,6 +5,7 @@
 data/*
 !data/.gitkeep
 !data/sample_sales.csv
+!data/sample_stores.csv
 
 # Secrets. kaggle.json lives in ~/.kaggle, but a KAGGLE_KEY in a local .env must
 # never become committable by accident.

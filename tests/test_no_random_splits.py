@@ -44,8 +44,11 @@ SHUFFLING_SPLITTERS = frozenset(
 #: The one module allowed to name them, relative to `src/stockout`.
 SPLITTER_EXEMPTION = Path("split") / "strategies.py"
 
-#: The one module allowed to draw random numbers directly.
-RANDOMNESS_EXEMPTION = "synth.py"
+#: The only modules allowed to draw random numbers directly. Both are generators, both
+#: take an explicit seed, and both promise a byte-identical frame from it. The list is
+#: written out rather than matched by a `synth*` glob so that adding a third one is a
+#: decision somebody makes, not a filename that happens to slip past.
+RANDOMNESS_EXEMPTIONS = frozenset({"synth.py", "synth_stores.py"})
 
 
 def _python_files() -> list[Path]:
@@ -104,6 +107,8 @@ def test_the_only_module_drawing_random_numbers_is_the_generator() -> None:
             and node.attr == "random"
         }
     )
-    assert users in ([], [RANDOMNESS_EXEMPTION]), (
-        f"{users} draw random numbers directly; only {RANDOMNESS_EXEMPTION} may."
+    offenders = set(users) - RANDOMNESS_EXEMPTIONS
+    assert not offenders, (
+        f"{sorted(offenders)} draw random numbers directly; "
+        f"only {sorted(RANDOMNESS_EXEMPTIONS)} may."
     )

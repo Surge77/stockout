@@ -18,6 +18,7 @@ DATA_DIR = _ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 REPORTS_DIR = _ROOT / "reports"
 SAMPLE_PATH = DATA_DIR / "sample_sales.csv"
+SAMPLE_STORES_PATH = DATA_DIR / "sample_stores.csv"
 
 KAGGLE_COMPETITION = "rossmann-store-sales"
 

@@ -1,0 +1,5 @@
+store,store_type,assortment,competition_distance,competition_open_since_month,competition_open_since_year,promo2,promo2_since_week,promo2_since_year,promo_interval
+1,a,a,13270.358331808513,8.0,1979.0,1,47.0,2013.0,"Jan,Apr,Jul,Oct"
+2,b,b,11221.674296623158,11.0,1926.0,0,,,
+3,c,c,1197.4701184856824,,,1,16.0,2010.0,"Mar,Jun,Sept,Dec"
+4,d,a,,11.0,2005.0,0,,,
