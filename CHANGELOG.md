@@ -8,12 +8,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Planned
 
 - Answers to the five questions in `docs/questions.md`, which need the real Rossmann file
-  and nothing else — every cell that produces them now runs
-- Conditional coverage. ADR 0009 corrects on average, so a single store or a single
-  December can still be badly covered and the calibration will not notice
-- A calibration whose coverage statement is provable rather than measured. The two-fit
-  design trades the split-conformal theorem for correct lag alignment, and says so
-- A charge on stock in transit, which ADR 0010 currently gives away free
+  and nothing else — every cell that produces them runs. **This is the only thing left that
+  the repository set out to do**, and it is blocked on a Kaggle account and an accepted set
+  of competition rules rather than on any code
+- Coarser calibration groups. ADR 0012's per-store correction needs 199 rows a store for a
+  0.99 grid and Rossmann has about 36, so the usable unit is a cluster of stores — and no
+  clustering exists here to build one from
+- Conditional coverage *by season*, which ADR 0012 shows can be measured and argues cannot
+  be corrected: the calibration window holds none of the months being predicted
+- A charge for shortening the lead time. ADR 0011 prices holding the pipeline and still
+  knows nothing about what expedited freight or a closer supplier would cost
+
+## [0.4.0] — 2026-08-17
+
+The three defects the last release wrote down, closed. Two of them produced numbers that
+contradict what this repository previously argued, and both contradictions are in the
+release notes rather than under them.
+
+### Added
+
+- **A charge on stock in transit** — `simulate(..., transit_holding_cost=...)`, defaulting
+  to the on-hand rate because committed capital earns nothing on a lorry, with `0.0` for a
+  supplier-owned pipeline. Reported as its own `transit_cost` column, never blended into
+  holding. `--transit-holding-cost` on the command line. ADR 0011.
+- **Conditional coverage** — `metrics.coverage_by_segment` and
+  `report.conditional_coverage_to_markdown` score each store or month at each level with
+  the row count the number rests on. `stockout calibration --by store|month`. ADR 0012.
+- **Per-group calibration** — `ConformalQuantileForecaster(group_by=...)` learns a Mondrian
+  offset per group above a floor *derived* from the grid rather than chosen:
+  `conformity.min_rows_for` returns the count at which the strictest level stops
+  saturating. `pooled_fallback_groups` and `unseen_groups` name every group that took the
+  marginal offset instead. `--calibrate-by store`. ADR 0012.
+- **A calibration that carries its theorem** — `ConformalQuantileForecaster(refit=False)`
+  serves the probe itself, so the offsets describe the estimator that produced them. Made
+  possible by `design.GbmDesign` separating *boosting rows* from *feature history*: the
+  model trains on the inner window while still lagging across the calibration window, which
+  is the alignment problem ADR 0009 thought made this impossible. `--no-refit`. ADR 0013.
+
+### Changed
+
+- `stockout.__version__` is read from the installed distribution. It had said `0.1.0` since
+  the first release while `pyproject.toml` moved to `0.3.0` — hand-maintained in two places,
+  wrong in one, and silent because nothing imports a version to check it.
+- Six files split by responsibility to stay inside the 300-line limit, no behaviour
+  changed: `inventory/frontier.py`, `models/conformity.py`, `models/design.py`,
+  `models/protocols.py`, `commands.py`, and `test_cli.py` into three files.
+
+### Notes
+
+- **The transit charge multiplies lead-time costs eightfold and moves no ranking.** At a
+  seven-day lead time the cheapest level's total goes 271,616 → 2,153,995 and the cheapest
+  level stays 0.50. In steady state the pipeline holds throughput × lead time and
+  throughput is demand, which the service level does not change, so `transit_cost` varies
+  by 2.6% across the grid while `holding_cost` more than doubles. Omitting it was harmless
+  for ranking service levels and wrong by a factor of eight for quoting a cost.
+- **The marginal coverage number this repository has been publishing understated the worst
+  store by about two thirds.** Raw: worst marginal gap −0.193, worst store −0.314. After
+  calibration: −0.121 marginal against −0.207 for store 1. A pooled offset also has to be
+  wrong in two directions at once — store 2 now over-covers at three levels while store 1
+  under-covers at all six.
+- **Marginal calibration improved the conditional picture anyway**, narrowing the per-store
+  spread at the 0.90 from 0.229 to 0.115. Not luck: ADR 0009 divides each residual by the
+  model's own prediction, so the correction is relative and already scales with store level.
+  It was justified on heteroscedasticity grounds and bought conditional validity too.
+- **ADR 0009 predicted that serving the probe would be "a worse trade". It is not.**
+  Coverage improves at every level from the 0.80 up (0.90: −0.121 → −0.086; 0.99: −0.061 →
+  −0.026) and degrades at the median. The cost lands on the point forecast and lands
+  consistently — WMAPE 0.0723 → 0.0758, MAE 674.4 → 707.2, median pinball 337.2 → 353.6,
+  all three about 5%, which is what dropping 42 of ~600 training days buys.
+- **Those coverage differences are about 1.4 sigma on 140 test rows**, so `refit=True`
+  remains the default. Moving a default on that evidence is the error ADR 0009 refused when
+  it declined to pick a row threshold from four draws.
+- **On this data the per-group correction declines to act.** Four stores hold 35 trading
+  rows each against a derived floor of 199, so every group falls back to pooled and the
+  command says so. That is the honest result; Rossmann is worse per store, not better.
 
 ## [0.3.0] — 2026-08-16
 

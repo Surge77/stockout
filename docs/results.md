@@ -108,6 +108,96 @@ frontier described under *what didn't work* below, where every row was 1.0000 an
 chart had nothing in it. Recorded in
 [ADR 0010](decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).
 
+### Charging for the lorry multiplies the bill and moves nothing
+
+The table above priced the shelf and not the pipeline. On this fold the shelf holds a mean
+of 5,735 and the pipeline holds 44,819, so about seven eighths of the inventory was free.
+`python -m stockout frontier --model gbm_conformal --lead-time 7`, with the charge:
+
+| quantile | holding | transit | shortage | total | mean on hand | mean on order |
+|---|---|---|---|---|---|---|
+| 0.50 | 240,884 | 1,882,379 | 30,732 | **2,153,995** | 5,735 | 44,819 |
+| 0.75 | 309,002 | 1,925,683 | 4,975 | 2,239,661 | 7,357 | 45,850 |
+| 0.80 | 326,746 | 1,928,135 | 2,615 | 2,257,496 | 7,780 | 45,908 |
+| 0.90 | 378,419 | 1,930,876 | 0 | 2,309,295 | 9,010 | 45,973 |
+| 0.95 | 451,402 | 1,930,730 | 0 | 2,382,132 | 10,748 | 45,970 |
+| 0.99 | 582,765 | 1,913,350 | 0 | 2,496,114 | 13,875 | 45,556 |
+
+**Eight times the cost and the same answer.** Little's law explains it: in steady state the
+quantity in transit is the arrival rate times the lead time, and the arrival rate is demand,
+which the service level does not change. `transit_cost` therefore spans 2.6% across the
+entire grid while `holding_cost` more than doubles, and adding a near-constant to every row
+of a table cannot change which row is smallest.
+
+That is the precise sense in which the omission was and was not serious. For **ranking**
+service levels at a fixed lead time it was harmless, which is why nothing looked wrong. For
+**quoting a cost** it was wrong by a factor of eight, and a number valid only as an ordering
+should never have been printed in a column headed `total`. The old arithmetic is recoverable
+and exactly intact: 240,884 + 30,732 = 271,616, which is the total the previous table
+published for that row. See
+[ADR 0011](decisions/0011-stock-in-transit-is-not-free.md).
+
+### The coverage number in this file was hiding the worst store
+
+Every coverage figure above and below is *marginal* — an average over rows. An average over
+groups is the one statistic that cannot report a bad group, and asking per store says so
+immediately. `python -m stockout calibration --by store`, 35 trading rows per store:
+
+| store | 0.50 | 0.75 | 0.80 | 0.90 | 0.95 | 0.99 |
+|---|---|---|---|---|---|---|
+| 1 | −0.071 | **−0.207** | −0.171 | −0.157 | −0.150 | −0.104 |
+| 2 | −0.157 | +0.050 | +0.000 | −0.071 | +0.021 | +0.010 |
+| 3 | −0.157 | −0.150 | −0.171 | −0.186 | −0.121 | −0.104 |
+| 4 | +0.043 | −0.093 | −0.086 | −0.071 | −0.007 | −0.047 |
+
+The worst marginal gap for this model is **0.121**. Store 1's worst gap is **0.207**, and
+the raw model is worse still — 0.314 against a marginal 0.193. The number this file has been
+publishing understated the worst store by about two thirds.
+
+Store 2 also *over*-covers at three levels while store 1 under-covers at all six, which is
+not a defect in the correction but a property of it: one additive offset cannot move a quiet
+shop up and a busy shop down. Read the spread rather than the third decimal — 35 rows put a
+standard error near 0.05 on each cell, which is why the row count is printed beside it.
+
+One thing here was not expected. Marginal calibration **narrowed** the per-store spread at
+the 0.90 from 0.229 to 0.115. That is not luck: ADR 0009 divides each residual by the model's
+own prediction, so the correction is relative and already scales with store level. It was
+justified on heteroscedasticity grounds and bought a share of conditional validity as well.
+[ADR 0012](decisions/0012-coverage-is-measured-per-group-and-corrected-per-group-only-when-the-rows-allow.md).
+
+### The refit was the reason the theorem did not apply, and it was avoidable
+
+ADR 0009 gave up the split-conformal guarantee because the deployed model is refitted, and
+argued that serving the probe instead would be *a worse trade* — its retained history stops
+42 days before the test window, and a positional lag reaching across that hole reads the
+wrong dates. The alignment problem is real. It is also a fact about which rows a model keeps
+for **building features**, not which rows it **trains on**, and separating the two removes
+it. `--no-refit` boosts on the inner window while lagging across the whole training frame:
+
+| nominal | gap, refit | gap, no refit | pinball, refit | pinball, no refit |
+|---|---|---|---|---|
+| 0.50 | −0.086 | **−0.107** | 337.2 | **353.6** |
+| 0.75 | −0.100 | −0.107 | 279.6 | 279.8 |
+| 0.80 | −0.107 | **−0.079** | 250.3 | 252.2 |
+| 0.90 | −0.121 | **−0.086** | 174.9 | **160.8** |
+| 0.95 | −0.064 | **−0.057** | 116.1 | **104.8** |
+| 0.99 | −0.061 | **−0.026** | 42.3 | **36.1** |
+
+Coverage improves at every level from the 0.80 up and degrades at the median — the half
+service levels are chosen from, and the half they are not. The cost lands on the point
+forecast and lands consistently: WMAPE 0.0723 → 0.0758, MAE 674.4 → 707.2, median pinball
+337.2 → 353.6. All three move by about **5%**, which is what dropping 42 of roughly 600
+training days buys, and their agreeing to a tenth of a percentage point is the check that
+this is a data-volume effect and not something stranger.
+
+**This does not make coverage proven, and it is worth being exact about what it does.** The
+theorem needs the calibration and test rows to be exchangeable, and a test window that comes
+after a calibration window is not. One unprovable assumption remains where there were two,
+and the avoidable one is gone. The coverage differences are also about 1.4 sigma on 140 rows,
+which is why `refit=True` is still the default — moving a default on that evidence would be
+the magic constant this repository has refused twice.
+[ADR 0013](decisions/0013-the-refit-is-optional-and-dropping-it-buys-back-one-of-two-premises.md).
+
 ---
 
 ## What didn't work

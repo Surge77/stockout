@@ -96,12 +96,26 @@ Quantile crossing affected 42.9% of rows and was sorted before use.
   two-store draw with 70 calibration rows, both the worst coverage gap and the pinball loss
   got worse. `calibration_rows` and `saturated_quantiles` are public and printed; no
   threshold is enforced, because one picked from four draws would be a guess.
-- **Coverage is corrected marginally, not conditionally.** A single store or a single
-  season can still be badly covered without this layer noticing.
-- **The coverage claim is measured, not guaranteed.** Split conformal proves marginal
-  coverage for the estimator whose residuals were used; the deployed model is refitted on
-  more data, so the theorem does not transfer. Every figure quoted here is an
-  out-of-sample measurement — [ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md).
+- **Coverage is corrected marginally by default, and the marginal figure understates the
+  worst store by about two thirds.** Measured per store, the raw model's worst gap is 0.314
+  against a marginal 0.193, and the calibrated model's is 0.207 against a marginal 0.121.
+  Store 2 over-covers at three levels while store 1 under-covers at all six, which is what a
+  single additive offset must do when asked to move a quiet shop and a busy one in opposite
+  directions. `stockout calibration --by store|month` prints the grid; `--calibrate-by
+  store` corrects per store where the rows allow, which on four synthetic stores is nowhere
+  — [ADR 0012](docs/decisions/0012-coverage-is-measured-per-group-and-corrected-per-group-only-when-the-rows-allow.md).
+- **Season-shaped miscalibration is measurable and not correctable.** The calibration window
+  is the 42 days before the test window and contains none of the months being predicted, so
+  there is no December residual with which to correct December.
+- **The coverage claim is measured, not proven, and `--no-refit` removes one of the two
+  reasons why.** Split conformal proves marginal coverage for the estimator whose residuals
+  were used; by default the deployed model is refitted on more data, so the theorem does not
+  transfer. `refit=False` serves the estimator the residuals describe and recovers that
+  half, at a cost of about 5% on WMAPE, MAE and median pinball alike. What remains is
+  exchangeability between the calibration and test rows, which a test window following a
+  calibration window does not have — so no figure here is a guarantee
+  ([ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md),
+  [ADR 0013](docs/decisions/0013-the-refit-is-optional-and-dropping-it-buys-back-one-of-two-premises.md)).
 - **Pooled by default, structured not at all.** The baselines fit per store. The
   gradient-boosted models are a single global fit with `store` as a feature, so they pool
   incidentally rather than by design — no hierarchy, no per-store effects, no shrinkage
@@ -110,13 +124,23 @@ Quantile crossing affected 42.9% of rows and was sorted before use.
   per store-weekday) for all 42 days. It cannot represent a trend or an approaching event.
 - **Promotions are ignored** by all three baselines, despite `promo` being available and
   future-known. The gradient-boosted models do use them.
-- **The delivery pipeline is opt-in and its stock in transit is free.** By default the
-  simulator prices a repeated single-period newsvendor
+- **The delivery pipeline is opt-in.** By default the simulator prices a repeated
+  single-period newsvendor
   ([ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md)); `--lead-time`
-  opens a real pipeline, but nothing is charged for goods on a lorry, so the model prefers
-  a long pipeline to a full shelf in a way a financed business would not. Under a lead time
-  the cost-minimising service level is no longer the critical ratio at all —
+  opens a real pipeline, and under one the cost-minimising service level is no longer the
+  critical ratio at all —
   [ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).
+- **Stock in transit is charged at the shelf rate, which is a bound rather than an
+  estimate.** On-hand stock also buys warehouse space, insurance and shrinkage and a lorry
+  buys none of them, so the true transit rate is lower; any specific fraction would be
+  invented, so the conservative bound is the default and `--transit-holding-cost` accepts the
+  real one. The charge takes a seven-day lead time's cheapest total from 271,616 to
+  2,153,995 and moves no ranking, because the pipeline is throughput × lead time and
+  throughput does not depend on the service level
+  ([ADR 0011](docs/decisions/0011-stock-in-transit-is-not-free.md)).
+- **Shortening the lead time is not priced at all.** Holding the pipeline costs something
+  now; expedited freight or a closer supplier still costs nothing, so the model can say a
+  long pipeline is expensive and not what to do about it.
 - **Synthetic evaluation only**, so far.
 
 ## Ethical and practical considerations
@@ -136,7 +160,12 @@ Running any of it on the real Rossmann file. Every figure above is a statement a
 `stockout.data.synth`, and the five questions in [docs/questions.md](docs/questions.md)
 stay unanswered until they can be asked of real data.
 
-Both of the follow-ups this card used to list have been done — the quantiles are calibrated
-and the simulator has a pipeline — and both turned out to be half-fixes with their
-remainders written down. What is left, in order: conditional rather than marginal coverage,
-and a carrying charge on stock in transit.
+Every follow-up this card has ever listed has now been done — the quantiles are calibrated,
+the simulator has a pipeline, the pipeline is charged for, coverage is measured per group,
+and the refit that cost the theorem is optional. Each turned out to be a partial fix with its
+remainder written down, and two of them produced numbers contradicting what an earlier
+version of this card asserted: the marginal coverage figure was understating the worst store
+by two thirds, and serving the probe was supposed to be a worse trade and is not.
+
+What is left is not a modelling change. It is `python -m stockout fetch`, one line at the top
+of the notebook, and five answers read off cells that already run.

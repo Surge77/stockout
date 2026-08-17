@@ -120,11 +120,29 @@ Both numbers are in [docs/results.md](docs/results.md) and
 rather than smoothed over.
 
 **Add a delivery lag and the target moves again.** `--lead-time 7` opens a real order
-pipeline and sizes the base-stock level across the protection interval; costs rise sixfold
-and the cheapest level drops to 0.50, because holding is charged on every day of that
-interval and a lost sale only once. `Cu / (Cu + Co)` is the answer to a single-period
-question and stops being the answer when the interval is longer than a day
+pipeline and sizes the base-stock level across the protection interval; the cheapest level
+drops to 0.50, because holding is charged on every day of that interval and a lost sale only
+once. `Cu / (Cu + Co)` is the answer to a single-period question and stops being the answer
+when the interval is longer than a day
 ([ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md)).
+
+**Charging for the lorry multiplies the bill and moves nothing.** Stock in transit used to
+be free, and at a seven-day lead time the lorry carries about eight times what the shelf
+does. Charging it takes the cheapest level's total from 271,616 to 2,153,995 — and leaves it
+the cheapest level. In steady state the pipeline holds throughput × lead time, and
+throughput is demand, which the service level does not change: `transit_cost` moves 2.6%
+across the whole grid while `holding_cost` more than doubles. Adding a near-constant to every
+row cannot change which row is smallest, so the omission was harmless for *ranking* service
+levels and wrong by a factor of eight for *quoting* a cost
+([ADR 0011](docs/decisions/0011-stock-in-transit-is-not-free.md)).
+
+**And the marginal coverage table was hiding the worst store.** `--by store` asks the
+calibration question per group instead of on average. After calibration the worst marginal
+gap is 0.121; store 1's gap at the 0.75 is 0.207, and store 2 *over*-covers at three levels
+while store 1 under-covers at all six — which is what one additive offset must do when it is
+asked to move a quiet shop and a busy one in opposite directions. An average over groups is
+exactly the statistic that cannot report a bad group
+([ADR 0012](docs/decisions/0012-coverage-is-measured-per-group-and-corrected-per-group-only-when-the-rows-allow.md)).
 
 ## The four traps this data sets
 
@@ -265,15 +283,37 @@ explanation.
 - **Calibration needs rows and is not free below about a hundred of them.** On a two-store
   draw it made both coverage and pinball loss worse. The row count is printed rather than
   policed, because a threshold picked from four draws is a guess with a table under it.
-- **Coverage is corrected on average, not per store.** A single quiet shop, or a single
-  December, can still be badly covered and this layer will not notice —
-  [ADR 0009](docs/decisions/0009-conformal-calibration-not-a-recalibrated-loss.md).
-- **The delivery pipeline is opt-in, and stock in transit is free.** By default the
-  simulator prices a repeated single-period newsvendor: stock is topped up daily, unmet
-  demand is lost ([ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md)).
-  `--lead-time` opens a real pipeline, but nothing is charged for goods on a lorry, so the
-  model prefers a long pipeline to a full shelf in a way a financed business would not —
-  [ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).
+- **Coverage is corrected on average by default, and the average hides the worst store by
+  about two thirds.** `--by store` measures it: the worst marginal gap after calibration is
+  0.121, and store 1's is 0.207. `--calibrate-by store` corrects per store where the rows
+  allow — which on this data is nowhere, because a 0.99 needs 199 rows a store and four
+  synthetic stores hold 35 each. Rossmann is worse per store, not better
+  ([ADR 0012](docs/decisions/0012-coverage-is-measured-per-group-and-corrected-per-group-only-when-the-rows-allow.md)).
+- **Season-shaped miscalibration can be measured and cannot be corrected.** `--by month`
+  will show it; nothing will fix it, because the calibration window is the 42 days *before*
+  the test window and holds none of the months in question.
+- **The coverage claim is measured, not proven — and `--no-refit` gets it one assumption
+  closer.** Serving the probe rather than refitting makes the offsets describe the estimator
+  that produced them, so the split-conformal theorem applies to it. It still needs the
+  calibration and test rows to be exchangeable, and a test window that comes *after* a
+  calibration window is not. One assumption remains where there were two, and it costs
+  about 5% of point accuracy
+  ([ADR 0013](docs/decisions/0013-the-refit-is-optional-and-dropping-it-buys-back-one-of-two-premises.md)).
+- **The delivery pipeline is opt-in.** By default the simulator prices a repeated
+  single-period newsvendor: stock is topped up daily, unmet demand is lost
+  ([ADR 0008](docs/decisions/0008-the-simulator-has-no-shipping-lag.md)). `--lead-time`
+  opens a real pipeline, and under one the cost-minimising service level is no longer the
+  critical ratio at all
+  ([ADR 0010](docs/decisions/0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md)).
+- **Stock in transit is charged at the shelf rate, which is an upper bound and not an
+  estimate.** On-hand also buys warehouse space and insurance; a lorry buys neither, so the
+  true financing rate is lower. Any particular fraction would be a number picked to look
+  reasonable, so the conservative bound is the default and `--transit-holding-cost` takes
+  the real one ([ADR 0011](docs/decisions/0011-stock-in-transit-is-not-free.md)).
+- **Shortening the lead time is not priced.** Holding the pipeline now costs something;
+  expedited freight, a closer supplier and smaller more frequent deliveries still cost
+  nothing, so the model can tell you a long pipeline is expensive and not what to do about
+  it.
 
 ## Documentation
 

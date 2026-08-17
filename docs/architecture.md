@@ -27,7 +27,7 @@ data/raw/train.csv          data.synth.make_sales
                       v
               inventory.policy              critical ratio -> the quantile to stock to
                       v
-              inventory.simulate.frontier   cost and fill rate per service level
+              inventory.frontier.frontier   cost and fill rate per service level
                       v
               evaluate.report.frontier_to_markdown   names the cheapest level
 ```
@@ -76,7 +76,8 @@ exhaustively with no fixtures beyond a generated frame.
 src/stockout/
 ├── config.py          paths, horizons, the newsvendor cost pair, env knobs
 ├── errors.py          StockoutError and its four children
-├── cli.py             fetch | synth | describe | backtest | calibration | frontier
+├── cli.py             the argument surface: what each subcommand accepts, and nothing else
+├── commands.py        what each subcommand does once the parser has agreed
 ├── plots.py           figure styling and saving; no chart builders
 ├── data/
 │   ├── download.py    Kaggle fetch; the only network call in the package
@@ -91,18 +92,29 @@ src/stockout/
 ├── split/rolling.py   guard 3 — rolling origin, and nothing else
 ├── models/
 │   ├── base.py        Forecaster protocol; zero_when_closed; open_rows
+│   ├── protocols.py   what calibration needs of a model, and the history-aware extra
 │   ├── baselines.py   naive_last, seasonal_naive, moving_average
+│   ├── design.py      the design matrix, the retained history, the leakage guards
 │   ├── gbm.py         point (tweedie) and quantile; LightGBM imported inside fit()
-│   ├── conformal.py   split-conformal offsets; a probe fit and a deployed fit
+│   ├── conformity.py  the conformal arithmetic — order statistic, floors, row counts
+│   ├── conformal.py   the forecaster that applies it; marginal, grouped, refit or not
 │   └── __init__.py    the name -> factory registry the CLI's --model reads
 ├── evaluate/
-│   ├── metrics.py     WMAPE, MASE, RMSPE, pinball, coverage, coverage_table. No MAPE
+│   ├── metrics.py     WMAPE, MASE, RMSPE, pinball, coverage, marginal and per-segment
 │   ├── backtest.py    the rolling-origin loop; fresh model per fold
 │   └── report.py      markdown tables + verdicts that name the loser and the worst miss
 └── inventory/
     ├── policy.py      critical_ratio, the base-stock level, the order it implies
-    └── simulate.py    the day-by-day walk, the delivery pipeline, the efficient frontier
+    ├── simulate.py    the day-by-day walk, the delivery pipeline, what carrying costs
+    └── frontier.py    the sweep across service levels, and the curve it traces
 ```
 
-Every file is under the 300-line limit. `evaluate/metrics.py` and `features/lags.py` are
-the two closest to it; split them by responsibility before adding to either.
+Every file is under the 300-line limit, and six of them were split to keep it that way
+rather than by being trimmed: `frontier` came out of `simulate`, the conformal arithmetic
+out of the forecaster, the design matrix out of `gbm`, the protocols out of `conformal`, and
+the handlers out of `cli`. The rule is worth the churn for one reason — each split was
+possible only because the two halves *were* two things, and a file that cannot be split at
+the limit is a file that should have been designed differently earlier.
+
+`models/conformal.py` and `evaluate/report.py` are now the closest to the limit; split them
+by responsibility before adding to either.
