@@ -144,6 +144,54 @@ def coverage_table(y_true: ArrayLike, quantile_forecasts: pd.DataFrame) -> pd.Da
     return pd.DataFrame(rows, columns=["quantile", "empirical", "gap", "pinball"])
 
 
+def coverage_by_segment(
+    y_true: ArrayLike, quantile_forecasts: pd.DataFrame, *, segment: ArrayLike
+) -> pd.DataFrame:
+    """`coverage_table` again, once per group, so a marginal average cannot hide a group.
+
+    The table `coverage_table` produces is a *marginal* statement: correct on average
+    across every row it was given. Averages conceal. Two stores, one covered on every day
+    and one covered on six days in ten, average to exactly the nominal 0.8 and report a
+    gap of zero — and neither store is covered at 0.8. That is not a hypothetical; it is
+    the cost ADR 0009 wrote down and could not see, and this function is how it becomes
+    visible. ADR 0012.
+
+    One row per segment and quantile, ordered by segment so two runs agree. `rows` is
+    reported because a group of three rows cannot measure a 0.9 and a reader has to be
+    able to discount it — the same reason `ConformalQuantileForecaster.calibration_rows`
+    is public rather than policed.
+
+    `segment` is aligned positionally, like every other pairing in this module. Two series
+    describing the same rows but sliced differently would otherwise align into silent
+    NaNs, which is the failure this raises on instead.
+    """
+    if quantile_forecasts.shape[1] == 0:
+        raise ValueError("no quantile forecasts to score")
+
+    actual = _as_array(y_true)
+    groups = np.asarray(segment)
+    if groups.size != actual.size:
+        raise ValueError("the segment and the actuals must be the same length")
+
+    rows = []
+    for name in sorted(set(groups.tolist())):
+        inside = groups == name
+        for column in quantile_forecasts.columns:
+            nominal = _as_quantile(column)
+            predicted = np.asarray(quantile_forecasts[column], dtype="float64")[inside]
+            empirical = coverage(actual[inside], predicted)
+            rows.append(
+                {
+                    "segment": name,
+                    "quantile": nominal,
+                    "rows": int(inside.sum()),
+                    "empirical": empirical,
+                    "gap": empirical - nominal,
+                }
+            )
+    return pd.DataFrame(rows, columns=["segment", "quantile", "rows", "empirical", "gap"])
+
+
 def _as_quantile(name: object) -> float:
     try:
         return float(str(name))

@@ -62,7 +62,13 @@ import pandas as pd
 from ..data import schemas as s
 from ..errors import BacktestError
 from .base import zero_when_closed
-from .conformity import floored_scale, pooled_offsets, saturates
+from .conformity import (
+    floored_scale,
+    grouped_offsets,
+    min_rows_for,
+    pooled_offsets,
+    saturates,
+)
 from .gbm import DEFAULT_NUM_BOOST_ROUND, DEFAULT_QUANTILES, GbmQuantileForecaster
 
 
@@ -107,6 +113,8 @@ class ConformalQuantileForecaster:
         num_boost_round: int = DEFAULT_NUM_BOOST_ROUND,
         calibration_days: int | None = None,
         factory: Callable[[], QuantileModel] | None = None,
+        group_by: str | None = None,
+        min_group_rows: int | None = None,
     ) -> None:
         if horizon < 1:
             raise ValueError("horizon must be at least 1 day")
@@ -122,6 +130,16 @@ class ConformalQuantileForecaster:
         self.saturated_quantiles: tuple[float, ...] = ()
         self.calibration_rows = 0
         self.crossing_rate: float = float("nan")
+
+        # Mondrian calibration, off by default. `group_offsets` stays empty unless asked
+        # for, `pooled_fallback_groups` names the groups too thin to estimate, and both are
+        # public for the same reason `offsets` is: a correction nobody can inspect is a
+        # correction nobody can defend.
+        self.group_by = group_by
+        self.min_group_rows = min_group_rows
+        self.group_offsets: dict[object, dict[float, float]] = {}
+        self.pooled_fallback_groups: tuple[object, ...] = ()
+        self.unseen_groups: tuple[object, ...] = ()
 
         self._factory: Callable[[], QuantileModel] = factory or (
             lambda: GbmQuantileForecaster(
@@ -154,9 +172,35 @@ class ConformalQuantileForecaster:
         self.saturated_quantiles = tuple(
             level for level in sorted(self.offsets) if saturates(self.calibration_rows, level)
         )
+        if self.group_by is not None:
+            self._fit_groups(predicted=predicted, probe=probe, calibration=calibration)
 
         self._model = self._factory().fit(train)
         return self
+
+    def _fit_groups(
+        self, *, predicted: pd.DataFrame, probe: QuantileModel, calibration: pd.DataFrame
+    ) -> None:
+        """One offset set per group, for the groups whose row count can carry one."""
+        if self.group_by not in calibration.columns:
+            raise BacktestError(
+                f"cannot calibrate by {self.group_by!r}: the training frame has no such "
+                f"column. Available: {', '.join(map(str, calibration.columns))}"
+            )
+
+        floor = (
+            min_rows_for(float(column) for column in predicted.columns)
+            if self.min_group_rows is None
+            else self.min_group_rows
+        )
+        self.min_group_rows = floor
+        self.group_offsets, self.pooled_fallback_groups = grouped_offsets(
+            predicted=predicted,
+            scale=probe.predict(calibration),
+            frame=calibration,
+            groups=calibration[self.group_by],
+            min_rows=floor,
+        )
 
     def predict(self, future: pd.DataFrame) -> pd.Series:
         """The calibrated median, so this satisfies the same contract as every forecaster."""
@@ -175,7 +219,7 @@ class ConformalQuantileForecaster:
 
         shifted = {
             column: zero_when_closed(
-                (raw[column] + self.offsets.get(float(column), 0.0) * scale).clip(lower=0.0),
+                (raw[column] + self._offset_for(str(column), future) * scale).clip(lower=0.0),
                 future,
             )
             for column in raw.columns
@@ -188,6 +232,31 @@ class ConformalQuantileForecaster:
             index=adjusted.index,
             columns=adjusted.columns,
         )
+
+    def _offset_for(self, column: str, future: pd.DataFrame) -> pd.Series | float:
+        """The correction for one level: a scalar when pooled, a column when grouped.
+
+        A group the calibration window never showed — a store that opened since, or a
+        group too thin to estimate — takes the marginal offset. That is the right
+        fallback and a silent one, so the names are kept on `unseen_groups` and
+        `pooled_fallback_groups`; degrading from a conditional correction to a marginal
+        one without saying so is how a coverage claim stops being true quietly.
+        """
+        level = float(column)
+        pooled = self.offsets.get(level, 0.0)
+        key = self.group_by
+        if key is None or not self.group_offsets:
+            return pooled
+
+        if key not in future.columns:
+            raise BacktestError(
+                f"calibrated by {key!r} but the frame being predicted has no such column"
+            )
+        labels = future[key]
+        self.unseen_groups = tuple(
+            sorted(set(labels[~labels.isin(list(self.group_offsets))].tolist()))
+        )
+        return labels.map(lambda name: self.group_offsets.get(name, {}).get(level, pooled))
 
     def _split(self, train: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Inner training window and calibration tail, divided by date and never by row.

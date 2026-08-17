@@ -21,8 +21,13 @@ from .data.synth import make_sales
 from .data.validate import calendar_gaps, null_profile, validate_sales
 from .errors import BacktestError
 from .evaluate.backtest import backtest
-from .evaluate.metrics import coverage_table
-from .evaluate.report import calibration_to_markdown, frontier_to_markdown, to_markdown
+from .evaluate.metrics import coverage_by_segment, coverage_table
+from .evaluate.report import (
+    calibration_to_markdown,
+    conditional_coverage_to_markdown,
+    frontier_to_markdown,
+    to_markdown,
+)
 from .inventory.frontier import frontier
 from .inventory.policy import critical_ratio
 from .models import forecaster
@@ -99,6 +104,17 @@ def _newest_fold(args: argparse.Namespace) -> tuple[Fold, pd.DataFrame, pd.DataF
     )[-1]
     train, test = split_frame(frame, fold)
     return fold, train, test
+
+
+def _segment_for(frame: pd.DataFrame, by: str) -> pd.Series:
+    """The grouping `--by` names, as a column aligned to `frame`.
+
+    `store` stays an integer so that ten sorts after nine rather than after one, which is
+    the kind of detail that makes a 1,115-store table unreadable.
+    """
+    if by == "month":
+        return frame[s.DATE].dt.strftime("%Y-%m")
+    return frame[s.STORE]
 
 
 def _quantile_model(name: str, *, horizon: int) -> QuantileModel:
@@ -183,20 +199,37 @@ def run_calibration(args: argparse.Namespace) -> int:
             "no trading day, so no coverage can be measured"
         )
 
+    group_by = None if args.calibrate_by is None else s.STORE
     raw = GbmQuantileForecaster(horizon=args.horizon).fit(train)
-    calibrated = ConformalQuantileForecaster(horizon=args.horizon).fit(train)
+    calibrated = ConformalQuantileForecaster(horizon=args.horizon, group_by=group_by).fit(train)
 
     print(
         f"{fold.test_start.date()} to {fold.test_end.date()} · horizon {args.horizon}d · "
         f"{int(trading.sum()):,} trading rows held out · "
         f"{calibrated.calibration_rows:,} rows in the calibration window\n"
     )
+    segment = None if args.by is None else _segment_for(test.loc[trading], args.by)
     for model in (raw, calibrated):
         predicted = model.predict_quantiles(test).loc[trading]
         print(
             calibration_to_markdown(
                 coverage_table(actual, predicted), model_name=model.name
             )
+        )
+        if segment is not None:
+            print(
+                conditional_coverage_to_markdown(
+                    coverage_by_segment(actual, predicted, segment=segment),
+                    model_name=model.name,
+                )
+            )
+
+    if group_by is not None:
+        print(
+            f"> Per-{args.calibrate_by} calibration needs {calibrated.min_group_rows:,} "
+            f"trading rows per group before an offset is an estimate rather than the worst "
+            f"day that happened. {len(calibrated.group_offsets)} group(s) cleared it; "
+            f"{len(calibrated.pooled_fallback_groups)} fell back to the pooled offset.\n"
         )
 
     if calibrated.saturated_quantiles:

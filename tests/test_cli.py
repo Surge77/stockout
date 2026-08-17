@@ -284,3 +284,58 @@ def test_a_kaggle_failure_is_a_one_line_error(
     monkeypatch.setattr(download, "fetch", refuse)
     assert main(["fetch"]) == 1
     assert "error: accept the competition rules first" in capsys.readouterr().err
+
+
+def test_calibration_breaks_coverage_down_by_store_when_asked(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR 0012. A pooled gap of zero can sit on top of two badly covered stores."""
+    assert main(["calibration", "--data", str(data_file), "--by", "store"]) == 0
+    out = capsys.readouterr().out
+
+    assert out.count("coverage gap by segment") == 2
+    assert out.count("Worst group") == 2
+    assert "A marginal table cannot see this" in out
+
+
+def test_calibration_can_break_coverage_down_by_month(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the ADR 0009 cost: a single December, not just a single store."""
+    assert main(["calibration", "--data", str(data_file), "--by", "month"]) == 0
+    out = capsys.readouterr().out
+
+    assert "coverage gap by segment" in out
+    assert "2014-" in out
+
+
+def test_calibration_stays_marginal_unless_a_grouping_is_asked_for(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["calibration", "--data", str(data_file)]) == 0
+    assert "coverage gap by segment" not in capsys.readouterr().out
+
+
+def test_calibration_can_learn_an_offset_per_store_and_says_how_many_qualified(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR 0012's honest outcome on this data: the floor is derived, and nothing clears it.
+
+    A 0.99 in the grid needs 199 trading rows per store and two synthetic stores hold
+    about 35 each, so every group falls back to the pooled offset. That is the correct
+    answer rather than a disappointing one, and the command has to report it instead of
+    appearing to have calibrated per store.
+    """
+    argv = ["calibration", "--data", str(data_file), "--calibrate-by", "store"]
+    assert main(argv) == 0
+    out = capsys.readouterr().out
+
+    assert "Per-store calibration needs 199 trading rows per group" in out
+    assert "0 group(s) cleared it; 2 fell back to the pooled offset" in out
+
+
+def test_calibration_says_nothing_about_groups_when_it_did_not_group(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["calibration", "--data", str(data_file)]) == 0
+    assert "fell back to the pooled offset" not in capsys.readouterr().out

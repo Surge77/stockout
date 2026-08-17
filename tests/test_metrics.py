@@ -144,3 +144,84 @@ def test_a_coverage_table_needs_something_to_score() -> None:
 
     with pytest.raises(ValueError, match="no quantile forecasts"):
         metrics.coverage_table([1.0], pd.DataFrame(index=[0]))
+
+
+# --- conditional coverage (ADR 0012) --------------------------------------------------
+
+
+def test_a_marginal_coverage_table_can_hide_a_badly_covered_group() -> None:
+    """The whole reason this function exists, in one fixture.
+
+    Two stores, ten rows each. Store 1 is covered on every row and store 2 on six of
+    ten. Pooled, that is 0.80 against a nominal 0.80 — a gap of zero, and a table that
+    reports it has said nothing true about either store.
+    """
+    import pandas as pd
+
+    actual = pd.Series([100.0] * 20)
+    predicted = pd.DataFrame({"0.8": [200.0] * 10 + [200.0] * 6 + [50.0] * 4})
+    segment = pd.Series(["store 1"] * 10 + ["store 2"] * 10)
+
+    assert metrics.coverage_table(actual, predicted).loc[0, "gap"] == pytest.approx(0.0)
+
+    by_segment = metrics.coverage_by_segment(actual, predicted, segment=segment)
+    covered = dict(zip(by_segment["segment"], by_segment["empirical"], strict=True))
+    assert covered["store 1"] == pytest.approx(1.0)
+    assert covered["store 2"] == pytest.approx(0.6)
+
+
+def test_each_segment_reports_the_rows_its_number_rests_on() -> None:
+    """A group of three rows cannot measure a 0.9, and the reader has to be able to see it."""
+    import pandas as pd
+
+    actual = pd.Series([100.0] * 13)
+    predicted = pd.DataFrame({"0.9": [200.0] * 13})
+    segment = pd.Series(["big"] * 10 + ["thin"] * 3)
+
+    table = metrics.coverage_by_segment(actual, predicted, segment=segment)
+    rows = dict(zip(table["segment"], table["rows"], strict=True))
+    assert rows == {"big": 10, "thin": 3}
+
+
+def test_one_row_per_segment_and_quantile_pair() -> None:
+    import pandas as pd
+
+    actual = pd.Series([100.0] * 4)
+    predicted = pd.DataFrame({"0.5": [100.0] * 4, "0.9": [200.0] * 4})
+    segment = pd.Series(["a", "a", "b", "b"])
+
+    table = metrics.coverage_by_segment(actual, predicted, segment=segment)
+    assert len(table) == 4
+    assert list(table.columns) == ["segment", "quantile", "rows", "empirical", "gap"]
+
+
+def test_the_segment_has_to_describe_the_same_rows_as_the_actuals() -> None:
+    """Positional, like everything else here, so a length mismatch is an error not a NaN."""
+    import pandas as pd
+
+    with pytest.raises(ValueError, match="same length"):
+        metrics.coverage_by_segment(
+            pd.Series([1.0, 2.0]),
+            pd.DataFrame({"0.9": [1.0, 2.0]}),
+            segment=pd.Series(["a"]),
+        )
+
+
+def test_segments_are_ordered_so_two_runs_produce_the_same_table() -> None:
+    import pandas as pd
+
+    actual = pd.Series([100.0] * 4)
+    predicted = pd.DataFrame({"0.9": [200.0] * 4})
+    segment = pd.Series(["z", "a", "z", "a"])
+
+    table = metrics.coverage_by_segment(actual, predicted, segment=segment)
+    assert list(table["segment"]) == ["a", "z"]
+
+
+def test_a_conditional_table_still_needs_something_to_score() -> None:
+    import pandas as pd
+
+    with pytest.raises(ValueError, match="no quantile forecasts"):
+        metrics.coverage_by_segment(
+            pd.Series([1.0]), pd.DataFrame(index=[0]), segment=pd.Series(["a"])
+        )

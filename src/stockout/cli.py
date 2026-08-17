@@ -124,6 +124,21 @@ def _parser() -> argparse.ArgumentParser:
     p_calibration.add_argument(
         "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
     )
+    p_calibration.add_argument(
+        "--by",
+        choices=("store", "month"),
+        default=None,
+        help="also break coverage down by group, because a marginal average correct on "
+        "every row can be wrong on every store",
+    )
+    p_calibration.add_argument(
+        "--calibrate-by",
+        choices=("store",),
+        default=None,
+        help="learn a separate offset per store (Mondrian) instead of one pooled offset. "
+        "Only `store` is offered: a month-shaped group cannot be corrected, because the "
+        "calibration window contains none of the months being predicted",
+    )
     return parser
 
 

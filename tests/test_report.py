@@ -167,3 +167,69 @@ def test_a_table_with_no_finite_gap_reports_that_rather_than_naming_a_level() ->
         }
     )
     assert "No level could be scored" in calibration_to_markdown(table, model_name="stub")
+
+
+# --- conditional coverage (ADR 0012) --------------------------------------------------
+
+
+def _conditional_table() -> pd.DataFrame:
+    """Two stores at two levels. Store 2's 0.90 is the worst cell in the grid."""
+    return pd.DataFrame(
+        {
+            "segment": [1, 1, 2, 2],
+            "quantile": [0.5, 0.9, 0.5, 0.9],
+            "rows": [40, 40, 12, 12],
+            "empirical": [0.48, 0.88, 0.45, 0.60],
+            "gap": [-0.02, -0.02, -0.05, -0.30],
+        }
+    )
+
+
+def test_a_conditional_table_is_a_grid_of_segments_against_levels() -> None:
+    from stockout.evaluate.report import conditional_coverage_to_markdown
+
+    rendered = conditional_coverage_to_markdown(_conditional_table(), model_name="stub")
+
+    header = next(line for line in rendered.splitlines() if line.startswith("| segment"))
+    assert [cell.strip() for cell in header.split("|")[1:-1]] == [
+        "segment",
+        "rows",
+        "0.50",
+        "0.90",
+    ]
+    assert "-0.300" in rendered
+    assert "| 12" in rendered
+
+
+def test_the_worst_cell_is_named_with_the_rows_it_rests_on() -> None:
+    """A gap on twelve rows and a gap on four hundred are different claims."""
+    from stockout.evaluate.report import conditional_coverage_to_markdown
+
+    rendered = conditional_coverage_to_markdown(_conditional_table(), model_name="stub")
+
+    assert "Worst group `2` at quantile 0.90" in rendered
+    assert "under-covers by 0.300" in rendered
+    assert "on 12 row(s)" in rendered
+
+
+def test_over_covering_is_named_as_over_covering() -> None:
+    from stockout.evaluate.report import conditional_coverage_to_markdown
+
+    table = _conditional_table()
+    table.loc[3, "gap"] = 0.4
+    assert "over-covers by 0.400" in conditional_coverage_to_markdown(table, model_name="s")
+
+
+def test_a_conditional_table_with_no_finite_gap_names_no_group() -> None:
+    from stockout.evaluate.report import conditional_coverage_to_markdown
+
+    table = _conditional_table()
+    table["gap"] = float("nan")
+    assert "No segment could be scored" in conditional_coverage_to_markdown(table, model_name="s")
+
+
+def test_an_empty_conditional_table_says_so_rather_than_rendering_a_header() -> None:
+    from stockout.evaluate.report import conditional_coverage_to_markdown
+
+    empty = pd.DataFrame(columns=["segment", "quantile", "rows", "empirical", "gap"])
+    assert "No segment could be scored" in conditional_coverage_to_markdown(empty, model_name="s")

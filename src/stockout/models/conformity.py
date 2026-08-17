@@ -15,6 +15,7 @@ and none of it should need a booster to expose.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
@@ -56,6 +57,71 @@ def pooled_offsets(
         )
         for column in predicted.columns
     }
+
+
+def min_rows_for(levels: Iterable[float]) -> int:
+    """The row count the strictest level asked for needs before its offset is an estimate.
+
+    Derived from `saturates` rather than chosen: the answer is the smallest `n` at which
+    `ceil((n + 1) * q) < n` for the highest `q` in the grid — 3 rows for a 0.5, 19 for a
+    0.9, 199 for a 0.99. That makes the floor on per-group calibration a consequence of
+    the grid the caller asked for, not a constant somebody liked the look of. ADR 0009
+    refused a magic threshold and this is the alternative it implied.
+    """
+    strictest = max(levels)
+    if not 0.0 < strictest < 1.0:
+        raise ValueError("quantile levels must lie strictly between 0 and 1")
+
+    # The answer is *defined* as the smallest n where `saturates` is False, so it is found
+    # by asking `saturates` rather than by algebra. `(1 + q) / (1 - q)` is the closed form
+    # and it cannot be trusted to the integer: at q=0.9 the division lands on
+    # 19.000000000000004 and ceiling it gives 20, one row past the true floor and off by
+    # one in the unsafe direction. Truncating instead undershoots, which the scan repairs.
+    n = max(1, int((1.0 + strictest) / (1.0 - strictest)) - 1)
+    while saturates(n, strictest):
+        n += 1
+    return n
+
+
+def grouped_offsets(
+    *,
+    predicted: pd.DataFrame,
+    scale: pd.Series,
+    frame: pd.DataFrame,
+    groups: pd.Series,
+    min_rows: int,
+) -> tuple[dict[object, dict[float, float]], tuple[object, ...]]:
+    """A separate pooled offset per group — Mondrian conformal — where the rows allow it.
+
+    Returns the offsets of the groups that cleared `min_rows` trading rows, and the names
+    of the groups that did not. A group below the floor gets no entry at all rather than a
+    noisy one: the caller substitutes the marginal offset, and knows which groups it did
+    that for, because a correction that quietly degrades into a different correction is
+    worse than one that says so.
+
+    Splitting the residual pool is not free. Every group is estimated from a fraction of
+    the rows, so what is bought in conditional validity is paid for in variance, and below
+    the floor the payment exceeds the purchase — which is the finding ADR 0009 recorded at
+    70 pooled rows and the reason this has a floor at all. ADR 0012.
+    """
+    trading = np.asarray(frame[s.OPEN] == 1)
+    labels = np.asarray(groups)
+    if labels.size != trading.size:
+        raise ValueError("the grouping and the calibration frame must be the same length")
+
+    offsets: dict[object, dict[float, float]] = {}
+    thin: list[object] = []
+    for name in sorted(set(labels[trading].tolist())):
+        inside = trading & (labels == name)
+        if int(inside.sum()) < min_rows:
+            thin.append(name)
+            continue
+        offsets[name] = pooled_offsets(
+            predicted=predicted.loc[inside],
+            scale=scale.loc[inside],
+            frame=frame.loc[inside],
+        )
+    return offsets, tuple(thin)
 
 
 def conformal_quantile(scores: np.ndarray, level: float) -> float:
