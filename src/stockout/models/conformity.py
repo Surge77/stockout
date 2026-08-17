@@ -21,12 +21,43 @@ import numpy as np
 import pandas as pd
 
 from ..data import schemas as s
+from ..errors import BacktestError
 
 #: Lower bound on the per-row scale the conformity score is divided by, in the currency
 #: units the target is measured in. A shut store predicts zero, and dividing a residual
 #: by zero would put an infinity into a pooled quantile; the floor makes the arithmetic
 #: total without changing any row that carries real demand.
 SCALE_FLOOR = 1.0
+
+
+def split_calibration_window(
+    train: pd.DataFrame, *, days: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Inner training window and calibration tail, divided by date and never by row.
+
+    Dividing by row would put some of a day's stores on one side and the rest on the
+    other, which is a random split wearing a timestamp.
+
+    Both degenerate cases are refused here, before any model is fitted, because finding
+    out after training two sets of boosters that the window was unusable wastes the
+    fitting and arrives as a worse message.
+    """
+    dates = pd.to_datetime(train[s.DATE])
+    cutoff = pd.Timestamp(dates.max()) - pd.Timedelta(days=days)
+    inner = train[dates <= cutoff]
+    calibration = train[dates > cutoff]
+
+    if inner.empty:
+        raise BacktestError(
+            f"a {days}-day calibration window leaves no training data; the training "
+            f"frame spans {len(dates.unique())} days"
+        )
+    if not bool((calibration[s.OPEN] == 1).any()):
+        raise BacktestError(
+            "the calibration window contains no trading day, so no residual can be "
+            "measured; lengthen it with calibration_days"
+        )
+    return inner, calibration
 
 
 def pooled_offsets(
@@ -150,6 +181,24 @@ def saturates(n: int, level: float) -> bool:
     smoothed over, because a service level resting on a single observation should say so.
     """
     return n < 1 or math.ceil((n + 1) * level) / n >= 1.0
+
+
+def offsets_for_rows(
+    *,
+    labels: pd.Series,
+    group_offsets: dict[object, dict[float, float]],
+    pooled: float,
+    level: float,
+) -> pd.Series:
+    """Per-row correction: the row's own group offset where one exists, the pooled one else."""
+    return labels.map(lambda name: group_offsets.get(name, {}).get(level, pooled))
+
+
+def groups_without_offsets(
+    labels: pd.Series, group_offsets: dict[object, dict[float, float]]
+) -> tuple[object, ...]:
+    """Labels present in `labels` that no group offset covers, so the caller can say so."""
+    return tuple(sorted(set(labels[~labels.isin(list(group_offsets))].tolist())))
 
 
 def floored_scale(reference: pd.Series) -> pd.Series:

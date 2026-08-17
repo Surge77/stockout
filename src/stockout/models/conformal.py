@@ -35,26 +35,36 @@ then a relative correction and travels across stores.
 **Why two fits, and what it costs.** Split conformal wants the offsets measured on the
 model that will be deployed. The deployed model wants every day of history, and its lag
 features are built by *position*, so a hole punched in its calendar would silently
-misalign them. Rather than trade one for the other, a probe model is fitted on the inner
-window and scored on the calibration window, and the deployed model is fitted on all of
-it.
+misalign them. By default a probe model is fitted on the inner window and scored on the
+calibration window, and the deployed model is fitted on all of it.
 
-This is the refit that costs the guarantee. The residuals describe the probe, the
-predictions come from the deployed model, and the two are not exchangeable, so the
-coverage statement becomes an expectation rather than a theorem. The direction of the
-error is at least arguable: the probe has seen less data, so its residuals are no smaller
-than the deployed model's and the offsets it yields should if anything over-correct. That
-is an argument, not a proof, and the measured coverage is what the claim rests on.
+That refit is what costs the guarantee. The residuals describe the probe, the predictions
+come from the deployed model, and the two are not exchangeable, so the coverage statement
+becomes an expectation rather than a theorem. The direction of the error is at least
+arguable: the probe has seen less data, so its residuals are no smaller than the deployed
+model's and the offsets it yields should if anything over-correct. That is an argument, not
+a proof, and the measured coverage is what the default claim rests on.
 
-Serving predictions from the probe instead would restore the theorem and break the lag
-alignment it exists to protect, which is a worse trade. Fitting costs twice as long either
-way.
+**`refit=False` serves the probe, and buys back exactly one of two missing premises.** The
+lag alignment that made this look impossible was never a *training* problem, it was a
+*feature-history* problem: `design.GbmDesign` can boost on the inner window while
+retaining the whole training frame to lag against, so the deployed model keeps a complete
+calendar and has still never trained on the calibration window. The offsets then describe
+the estimator that serves them, and the split-conformal theorem applies to it.
+
+It does not follow that coverage is proven, and this module will not say that it is. The
+theorem needs the calibration and test rows to be exchangeable, and time-ordered retail
+demand is not: the test window comes after the calibration window, its distribution has
+moved, and same-day rows across stores are correlated. What changed is that the refit is
+no longer *also* in the way — one assumption remains instead of two, and it is named
+rather than absorbed. ADR 0013 measures what the swap costs in accuracy.
+
+Fitting costs twice as long with the refit and once without it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Protocol
 
 import numpy as np
 import pandas as pd
@@ -65,32 +75,17 @@ from .base import zero_when_closed
 from .conformity import (
     floored_scale,
     grouped_offsets,
+    groups_without_offsets,
     min_rows_for,
+    offsets_for_rows,
     pooled_offsets,
     saturates,
+    split_calibration_window,
 )
 from .gbm import DEFAULT_NUM_BOOST_ROUND, DEFAULT_QUANTILES, GbmQuantileForecaster
+from .protocols import HistoryAwareQuantileModel, QuantileModel
 
-
-class QuantileModel(Protocol):
-    """What calibration needs from the model it wraps.
-
-    Narrow on purpose. It exists so the calibration arithmetic can be tested against a
-    two-line stub in milliseconds instead of against six boosters, and because a
-    calibration layer that only works on LightGBM is a calibration layer nobody can
-    check.
-    """
-
-    crossing_rate: float
-
-    @property
-    def quantiles(self) -> tuple[float, ...]: ...
-
-    def fit(self, train: pd.DataFrame) -> QuantileModel: ...
-
-    def predict(self, future: pd.DataFrame) -> pd.Series: ...
-
-    def predict_quantiles(self, future: pd.DataFrame) -> pd.DataFrame: ...
+__all__ = ["ConformalQuantileForecaster", "QuantileModel"]
 
 
 class ConformalQuantileForecaster:
@@ -115,6 +110,7 @@ class ConformalQuantileForecaster:
         factory: Callable[[], QuantileModel] | None = None,
         group_by: str | None = None,
         min_group_rows: int | None = None,
+        refit: bool = True,
     ) -> None:
         if horizon < 1:
             raise ValueError("horizon must be at least 1 day")
@@ -141,6 +137,13 @@ class ConformalQuantileForecaster:
         self.pooled_fallback_groups: tuple[object, ...] = ()
         self.unseen_groups: tuple[object, ...] = ()
 
+        # True keeps the two-fit design of ADR 0009: the deployed model is refitted on the
+        # whole window and the coverage claim is measured. False serves the probe itself, so
+        # the offsets describe the estimator that produced them and the split-conformal
+        # theorem applies to it — at the price of the most recent horizon of training data.
+        # ADR 0013, which is also careful about what that does and does not prove.
+        self.refit = refit
+
         self._factory: Callable[[], QuantileModel] = factory or (
             lambda: GbmQuantileForecaster(
                 horizon=horizon,
@@ -161,7 +164,7 @@ class ConformalQuantileForecaster:
         """Learn the offsets on a held-out tail, then fit the model that will be used."""
         inner, calibration = self._split(train)
 
-        probe = self._factory().fit(inner)
+        probe = self._probe(inner, train)
         predicted = probe.predict_quantiles(calibration)
         self.offsets = pooled_offsets(
             predicted=predicted,
@@ -175,8 +178,33 @@ class ConformalQuantileForecaster:
         if self.group_by is not None:
             self._fit_groups(predicted=predicted, probe=probe, calibration=calibration)
 
-        self._model = self._factory().fit(train)
+        # The refit is what costs the theorem, so not refitting is what recovers it: the
+        # residuals above were measured on this very estimator rather than on a discarded
+        # one. It is also the more expensive option in accuracy, because the model that
+        # goes out has never seen the most recent horizon of history.
+        self._model = self._factory().fit(train) if self.refit else probe
         return self
+
+    def _probe(self, inner: pd.DataFrame, train: pd.DataFrame) -> QuantileModel:
+        """The model whose residuals become the offsets.
+
+        Trained on `inner` either way. When it is going to be *deployed* it also needs the
+        whole of `train` to lag against, because a test row's lag lands inside the
+        calibration window and a model retaining only the inner window would shift across
+        that hole by position and read the wrong dates. That distinction is the whole
+        reason ADR 0009 refitted, and `fit_within` is what removes the need to.
+        """
+        if self.refit:
+            return self._factory().fit(inner)
+
+        built = self._factory()
+        if not isinstance(built, HistoryAwareQuantileModel):
+            raise BacktestError(
+                f"refit=False needs a model offering fit_within(train, history=...) so the "
+                f"calibration window can be held out of training without being held out of "
+                f"the feature history; {type(built).__name__} does not"
+            )
+        return built.fit_within(inner, history=train)
 
     def _fit_groups(
         self, *, predicted: pd.DataFrame, probe: QuantileModel, calibration: pd.DataFrame
@@ -253,30 +281,10 @@ class ConformalQuantileForecaster:
                 f"calibrated by {key!r} but the frame being predicted has no such column"
             )
         labels = future[key]
-        self.unseen_groups = tuple(
-            sorted(set(labels[~labels.isin(list(self.group_offsets))].tolist()))
+        self.unseen_groups = groups_without_offsets(labels, self.group_offsets)
+        return offsets_for_rows(
+            labels=labels, group_offsets=self.group_offsets, pooled=pooled, level=level
         )
-        return labels.map(lambda name: self.group_offsets.get(name, {}).get(level, pooled))
 
     def _split(self, train: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Inner training window and calibration tail, divided by date and never by row.
-
-        Dividing by row would put some of a day's stores on one side and the rest on the
-        other, which is a random split wearing a timestamp.
-        """
-        dates = pd.to_datetime(train[s.DATE])
-        cutoff = pd.Timestamp(dates.max()) - pd.Timedelta(days=self.calibration_days)
-        inner = train[dates <= cutoff]
-        calibration = train[dates > cutoff]
-
-        if inner.empty:
-            raise BacktestError(
-                f"a {self.calibration_days}-day calibration window leaves no training "
-                f"data; the training frame spans {len(dates.unique())} days"
-            )
-        if not bool((calibration[s.OPEN] == 1).any()):
-            raise BacktestError(
-                "the calibration window contains no trading day, so no residual can be "
-                "measured; lengthen it with calibration_days"
-            )
-        return inner, calibration
+        return split_calibration_window(train, days=self.calibration_days)

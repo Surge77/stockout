@@ -31,8 +31,9 @@ from .evaluate.report import (
 from .inventory.frontier import frontier
 from .inventory.policy import critical_ratio
 from .models import forecaster
-from .models.conformal import ConformalQuantileForecaster, QuantileModel
+from .models.conformal import ConformalQuantileForecaster
 from .models.gbm import GbmQuantileForecaster
+from .models.protocols import QuantileModel
 from .split.rolling import Fold, rolling_origin, split_frame
 
 
@@ -201,13 +202,23 @@ def run_calibration(args: argparse.Namespace) -> int:
 
     group_by = None if args.calibrate_by is None else s.STORE
     raw = GbmQuantileForecaster(horizon=args.horizon).fit(train)
-    calibrated = ConformalQuantileForecaster(horizon=args.horizon, group_by=group_by).fit(train)
+    calibrated = ConformalQuantileForecaster(
+        horizon=args.horizon, group_by=group_by, refit=not args.no_refit
+    ).fit(train)
 
     print(
         f"{fold.test_start.date()} to {fold.test_end.date()} · horizon {args.horizon}d · "
         f"{int(trading.sum()):,} trading rows held out · "
         f"{calibrated.calibration_rows:,} rows in the calibration window\n"
     )
+    if args.no_refit:
+        print(
+            "> Served without a refit: the offsets describe the estimator that produced "
+            "them, so the split-conformal theorem applies to it. Coverage is still not "
+            "proven — the theorem also needs the calibration and test rows to be "
+            "exchangeable, and a test window that comes after a calibration window is "
+            "not. One assumption remains where there were two. ADR 0013.\n"
+        )
     segment = None if args.by is None else _segment_for(test.loc[trading], args.by)
     for model in (raw, calibrated):
         predicted = model.predict_quantiles(test).loc[trading]

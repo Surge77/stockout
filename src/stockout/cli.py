@@ -139,6 +139,13 @@ def _parser() -> argparse.ArgumentParser:
         "Only `store` is offered: a month-shaped group cannot be corrected, because the "
         "calibration window contains none of the months being predicted",
     )
+    p_calibration.add_argument(
+        "--no-refit",
+        action="store_true",
+        help="serve the probe rather than refitting on the whole window, so the offsets "
+        "describe the model that produced them and the split-conformal theorem applies "
+        "to it. Costs the most recent horizon of training data",
+    )
     return parser
 
 
