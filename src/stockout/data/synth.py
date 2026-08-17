@@ -12,6 +12,25 @@ structures that make the real problem hard, and nothing else:
    missing from the file, and code that assumes a contiguous calendar per store breaks
    on them. `validate.calendar_gaps` exists to find exactly this.
 4. A level shift, so a model that assumes stationarity is visibly punished.
+5. **Autocorrelated residuals.** What is left after the calendar is explained is not
+   independent day to day: weather, local events and footfall trends persist for a few
+   days at a time. This one was added last and for a specific reason — without it the
+   generator cannot demonstrate leakage *of any kind*.
+
+   The argument is short and worth keeping. Every leak — a shuffled split, a lag shorter
+   than the horizon, a rolling window that includes its own target — works by letting a
+   model see a neighbouring observation that is informative about the one it is
+   predicting. If the only unpredictable component is i.i.d. noise then no neighbour is
+   informative, the leak transmits nothing, and `evaluate/leakage.py` measures four arms
+   that all score the same. That was measured, not assumed: with i.i.d. noise even a
+   3-nearest-neighbour model given `lag_1` under a shuffled split showed an optimism of
+   -0.005, which is to say none.
+
+   So the residual is an AR(1) process. Its correlation at one day is `_NOISE_RHO` and at
+   seven days is `_NOISE_RHO ** 7`, which is near zero — meaning the honest features
+   (lags of at least the horizon) gain almost nothing from it, while `lag_1` gains a lot.
+   That gap is precisely the thing `features/lags.py` exists to prevent, and now it can
+   be shown rather than asserted.
 """
 
 from __future__ import annotations
@@ -34,6 +53,13 @@ _PROMO_LIFT = 1.27
 _ANNUAL_AMPLITUDE = 0.12
 _NOISE_SD = 0.08
 _AVG_BASKET = 9.5
+
+#: Day-to-day persistence of the residual. 0.7 makes yesterday genuinely informative
+#: about today — correlation 0.7 at one day — while leaving a week-old value nearly
+#: useless, since 0.7 ** 7 is about 0.08. That asymmetry is the whole point: it is what
+#: separates a horizon-respecting lag from a leaking one, and without it the two are
+#: indistinguishable. See structure 5 in the module docstring.
+_NOISE_RHO = 0.7
 
 #: One store closes for refurbishment. Chosen as an index into the store list so a
 #: caller asking for two stores still gets the behaviour.
@@ -96,7 +122,7 @@ def make_sales(
         is_open = (dow != s.SUNDAY).astype(np.int8)
         is_open = np.where(state_holiday == "a", 0, is_open).astype(np.int8)
 
-        noise = rng.normal(1.0, _NOISE_SD, size=days)
+        noise = _persistent_noise(rng, days)
         lift = np.where(promo == 1, _PROMO_LIFT, 1.0)
         sales = level * dow_factor * annual * lift * noise
         sales = np.where(is_open == 1, np.maximum(sales, 0.0).round(0), 0.0)
@@ -132,3 +158,26 @@ def make_sales(
 
     out = pd.concat(frames, ignore_index=True)
     return out.sort_values(list(s.KEY_COLUMNS)).reset_index(drop=True)
+
+
+def _persistent_noise(rng: np.random.Generator, days: int) -> np.ndarray:
+    """A multiplicative AR(1) residual with mean 1 and marginal SD `_NOISE_SD`.
+
+    `sqrt(1 - rho**2)` on the innovations is what keeps the *marginal* standard deviation
+    at `_NOISE_SD` rather than letting it inflate to `_NOISE_SD / sqrt(1 - rho**2)`.
+    Without it, turning up the persistence would also turn up the volatility and the two
+    effects could not be told apart.
+
+    Written as a loop rather than a filter call: 730 days is nothing, and the recurrence
+    is the definition of the thing.
+    """
+    innovation_sd = _NOISE_SD * float(np.sqrt(1.0 - _NOISE_RHO**2))
+    innovations = rng.normal(0.0, innovation_sd, size=days)
+
+    deviation = np.empty(days, dtype="float64")
+    # Start from the stationary distribution, not from zero. Seeding at zero would make
+    # every store unnaturally calm for its first fortnight.
+    deviation[0] = rng.normal(0.0, _NOISE_SD)
+    for day in range(1, days):
+        deviation[day] = _NOISE_RHO * deviation[day - 1] + innovations[day]
+    return 1.0 + deviation
