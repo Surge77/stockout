@@ -92,6 +92,23 @@ class _PipelineModel:
             raise BacktestError(f"{self.name} has not been fitted")
         return self.pipeline
 
+    def training_frame(self, train: pd.DataFrame) -> pd.DataFrame:
+        """The rows this model would actually fit on — subsampling and all.
+
+        Public because `models/tuning.py` has to search over exactly the same rows the
+        model would train on. A grid search run on a different row set than the final fit
+        chooses hyperparameters for a model nobody ends up building.
+        """
+        raise NotImplementedError
+
+    def unfitted_pipeline(self, train: pd.DataFrame) -> Pipeline:
+        """The pipeline as it would be, before fitting. What `GridSearchCV` clones."""
+        return self._assemble(self.training_frame(train))
+
+    def target_values(self, frame: pd.DataFrame) -> np.ndarray:
+        """The `y` for this task, as an array."""
+        raise NotImplementedError
+
     def _subsample(self, frame: pd.DataFrame) -> pd.DataFrame:
         """Cap the training rows for estimators that cannot survive the full set.
 
@@ -112,14 +129,20 @@ class SklearnForecaster(_PipelineModel):
     task = "regression"
     target = s.SALES
 
-    def fit(self, train: pd.DataFrame) -> SklearnForecaster:
+    def training_frame(self, train: pd.DataFrame) -> pd.DataFrame:
         trading = self._subsample(open_rows(train))
         if trading.empty:
             raise BacktestError(f"{self.name}: no trading rows to fit on")
+        return trading
 
+    def target_values(self, frame: pd.DataFrame) -> np.ndarray:
+        return frame[self.target].to_numpy(dtype="float64")
+
+    def fit(self, train: pd.DataFrame) -> SklearnForecaster:
+        trading = self.training_frame(train)
         self.pipeline = self._assemble(trading)
         self.training_rows = len(trading)
-        self.pipeline.fit(trading, trading[self.target].to_numpy(dtype="float64"))
+        self.pipeline.fit(trading, self.target_values(trading))
         return self
 
     def predict(self, future: pd.DataFrame) -> pd.Series:
@@ -139,14 +162,20 @@ class SklearnClassifier(_PipelineModel):
     task = "classification"
     target = DEMAND_CLASS_CODE
 
-    def fit(self, train: pd.DataFrame) -> SklearnClassifier:
+    def training_frame(self, train: pd.DataFrame) -> pd.DataFrame:
         labelled = self._subsample(labelled_rows(train))
         if labelled.empty:
             raise BacktestError(f"{self.name}: no labelled rows to fit on")
+        return labelled
 
+    def target_values(self, frame: pd.DataFrame) -> np.ndarray:
+        return frame[self.target].to_numpy(dtype="int64")
+
+    def fit(self, train: pd.DataFrame) -> SklearnClassifier:
+        labelled = self.training_frame(train)
         self.pipeline = self._assemble(labelled)
         self.training_rows = len(labelled)
-        self.pipeline.fit(labelled, labelled[self.target].to_numpy(dtype="int64"))
+        self.pipeline.fit(labelled, self.target_values(labelled))
         return self
 
     def predict(self, future: pd.DataFrame) -> pd.Series:
