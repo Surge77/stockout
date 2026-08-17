@@ -12,7 +12,7 @@ import pytest
 from stockout.inventory.simulate import SimulationResult, simulate
 
 
-def test_the_result_totals_its_two_cost_components() -> None:
+def test_the_result_totals_its_three_cost_components() -> None:
     """The dataclass fixes the shape of the answer before the answer exists."""
     result = SimulationResult(
         fill_rate=0.95,
@@ -21,7 +21,22 @@ def test_the_result_totals_its_two_cost_components() -> None:
         holding_cost=120.0,
         shortage_cost=45.0,
         mean_on_hand=210.0,
+        transit_cost=30.0,
     )
+    assert result.total_cost == pytest.approx(195.0)
+
+
+def test_a_result_with_no_pipeline_costs_nothing_to_carry_one() -> None:
+    """The default keeps every pre-pipeline number in this repository arithmetically intact."""
+    result = SimulationResult(
+        fill_rate=0.95,
+        cycle_service_level=0.8,
+        stockout_days=3,
+        holding_cost=120.0,
+        shortage_cost=45.0,
+        mean_on_hand=210.0,
+    )
+    assert result.transit_cost == pytest.approx(0.0)
     assert result.total_cost == pytest.approx(165.0)
 
 
@@ -156,3 +171,78 @@ def test_a_single_day_level_under_a_multi_day_wait_starves_the_shelf() -> None:
 def test_a_negative_lead_time_is_rejected_rather_than_read_as_early_delivery() -> None:
     with pytest.raises(ValueError, match="lead time cannot be negative"):
         simulate(pd.Series([1.0]), pd.Series([1.0]), lead_time_days=-1)
+
+
+# --- what the pipeline costs to carry (ADR 0011) --------------------------------------
+
+
+def test_without_a_lead_time_carrying_the_pipeline_costs_nothing() -> None:
+    """Nothing is ever in transit under instant delivery, so the new term cannot bite.
+
+    This is what makes ADR 0011 safe to turn on by default: every frontier this
+    repository has already published was priced at `lead_time_days=0`.
+    """
+    result = simulate(pd.Series([100.0] * 10), pd.Series([120.0] * 10))
+    assert result.transit_cost == pytest.approx(0.0)
+    assert result.total_cost == pytest.approx(result.holding_cost + result.shortage_cost)
+
+
+def test_stock_on_a_lorry_is_charged_at_the_on_hand_rate_by_default() -> None:
+    """Hand-checkable, and the same fixture as the bullwhip guard above.
+
+    Ten quiet days, a level of 100, a three-day wait. One order of 100 is placed on day
+    one and sits in transit for three days: 300 unit-days in the pipeline at a holding
+    rate of 1, so 300. It lands on day four and then sits on the shelf for seven days:
+    700 unit-days on hand, so 700. Nothing is ever short.
+    """
+    result = simulate(
+        pd.Series([0.0] * 10), pd.Series([100.0] * 10), lead_time_days=3, review_period_days=1
+    )
+    assert result.transit_cost == pytest.approx(300.0)
+    assert result.holding_cost == pytest.approx(700.0)
+    assert result.shortage_cost == pytest.approx(0.0)
+    assert result.total_cost == pytest.approx(1000.0)
+
+
+def test_a_supplier_owned_pipeline_can_be_made_free_without_touching_the_shelf() -> None:
+    """FOB destination: the goods are the supplier's until they land, so nothing is owed.
+
+    The point of the explicit zero is that it reproduces the pre-ADR-0011 arithmetic
+    exactly rather than approximately — and that the on-hand column does not move when
+    the transit rate does, because a charge folded into `holding_cost` would be
+    unauditable.
+    """
+    charged = simulate(
+        pd.Series([0.0] * 10), pd.Series([100.0] * 10), lead_time_days=3, review_period_days=1
+    )
+    free = simulate(
+        pd.Series([0.0] * 10),
+        pd.Series([100.0] * 10),
+        lead_time_days=3,
+        review_period_days=1,
+        transit_holding_cost=0.0,
+    )
+    assert free.transit_cost == pytest.approx(0.0)
+    assert free.holding_cost == pytest.approx(charged.holding_cost)
+    assert free.total_cost < charged.total_cost
+
+
+def test_the_transit_rate_is_independent_of_the_on_hand_rate() -> None:
+    """Capital cost and warehouse cost are different numbers, so they take two arguments."""
+    result = simulate(
+        pd.Series([0.0] * 10),
+        pd.Series([100.0] * 10),
+        lead_time_days=3,
+        review_period_days=1,
+        holding_cost=2.0,
+        transit_holding_cost=0.5,
+    )
+    assert result.holding_cost == pytest.approx(1400.0)
+    assert result.transit_cost == pytest.approx(150.0)
+
+
+def test_a_negative_transit_rate_is_rejected_rather_than_read_as_a_subsidy() -> None:
+    with pytest.raises(ValueError, match="transit holding cost cannot be negative"):
+        simulate(
+            pd.Series([1.0]), pd.Series([1.0]), lead_time_days=1, transit_holding_cost=-1.0
+        )

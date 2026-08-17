@@ -77,6 +77,42 @@ def test_the_frontier_sizes_across_the_protection_interval_once_deliveries_take_
     assert table["fill_rate"].iloc[0] < 1.0
 
 
+def test_the_frontier_prices_the_pipeline_it_opens() -> None:
+    """ADR 0011. A lead time creates stock in transit, and that stock is not free.
+
+    Zero at lead time zero, positive once there is a lorry, and always a column of its
+    own — a pipeline charge folded into `holding_cost` could not be audited against the
+    `mean_on_order` next to it.
+    """
+    demand = pd.Series([100.0] * 60)
+    quantiles = pd.DataFrame({"0.9": [120.0] * 60})
+
+    instant = frontier(demand, quantiles, review_period_days=1)
+    delayed = frontier(demand, quantiles, lead_time_days=7, review_period_days=1)
+
+    assert instant["transit_cost"].iloc[0] == pytest.approx(0.0)
+    assert delayed["transit_cost"].iloc[0] > 0.0
+    assert delayed["total_cost"].iloc[0] == pytest.approx(
+        delayed["holding_cost"].iloc[0]
+        + delayed["transit_cost"].iloc[0]
+        + delayed["shortage_cost"].iloc[0]
+    )
+
+
+def test_the_pipeline_charge_can_be_waived_without_moving_the_shelf_cost() -> None:
+    """The knob ADR 0011 leaves for a supplier-owned pipeline."""
+    demand = pd.Series([100.0] * 60)
+    quantiles = pd.DataFrame({"0.9": [120.0] * 60})
+
+    charged = frontier(demand, quantiles, lead_time_days=7, review_period_days=1)
+    free = frontier(
+        demand, quantiles, lead_time_days=7, review_period_days=1, transit_holding_cost=0.0
+    )
+
+    assert free["transit_cost"].iloc[0] == pytest.approx(0.0)
+    assert free["holding_cost"].iloc[0] == pytest.approx(charged["holding_cost"].iloc[0])
+
+
 def test_a_pipeline_opens_in_steady_state_rather_than_on_an_empty_shelf() -> None:
     """Charging a policy for the warehouse having been built yesterday measures nothing.
 

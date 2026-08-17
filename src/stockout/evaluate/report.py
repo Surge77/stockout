@@ -52,6 +52,7 @@ _FRONTIER_FORMATS: dict[str, str] = {
     "fill_rate": "{:.4f}",
     "cycle_service_level": "{:.3f}",
     "holding_cost": "{:,.0f}",
+    "transit_cost": "{:,.0f}",
     "shortage_cost": "{:,.0f}",
     "total_cost": "{:,.0f}",
     "mean_on_hand": "{:,.0f}",

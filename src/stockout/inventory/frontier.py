@@ -31,6 +31,7 @@ FRONTIER_COLUMNS: tuple[str, ...] = (
     "cycle_service_level",
     "stockout_days",
     "holding_cost",
+    "transit_cost",
     "shortage_cost",
     "total_cost",
     "mean_on_hand",
@@ -47,6 +48,7 @@ def frontier(
     initial_stock: float | None = None,
     holding_cost: float = DEFAULT_OVERAGE_COST,
     shortage_cost: float = DEFAULT_UNDERAGE_COST,
+    transit_holding_cost: float | None = None,
 ) -> pd.DataFrame:
     """Cost and fill rate at each target service level, for the efficient-frontier plot.
 
@@ -67,6 +69,11 @@ def frontier(
     starts empty guarantees a stockout on every day before the first lorry arrives, and
     charging a policy for the warehouse having been built yesterday measures the opening
     balance rather than the policy.
+
+    `transit_holding_cost` is passed straight through to `simulate`, where it defaults to
+    the on-hand rate (ADR 0011). Without a lead time nothing is ever in transit, so the
+    column it produces is zero and every instant-delivery number this repository has
+    published is unchanged.
     """
     if quantile_forecasts.shape[1] == 0:
         raise ValueError("no quantile forecasts to price")
@@ -85,6 +92,7 @@ def frontier(
             initial_stock=opening,
             holding_cost=holding_cost,
             shortage_cost=shortage_cost,
+            transit_holding_cost=transit_holding_cost,
         )
         rows.append(
             {
@@ -93,6 +101,7 @@ def frontier(
                 "cycle_service_level": result.cycle_service_level,
                 "stockout_days": result.stockout_days,
                 "holding_cost": result.holding_cost,
+                "transit_cost": result.transit_cost,
                 "shortage_cost": result.shortage_cost,
                 "total_cost": result.total_cost,
                 "mean_on_hand": result.mean_on_hand,

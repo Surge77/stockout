@@ -83,15 +83,66 @@ def test_frontier_prices_every_service_level_and_names_the_cheapest(
     assert "Cheapest at quantile" in out
 
 
+def _column(out: str, name: str) -> list[float]:
+    """Read one named column out of a printed markdown table.
+
+    By header rather than by position. The first version of this counted pipes, and when
+    a cost column was inserted in the middle it went on passing while asserting a
+    different column than the one it named — a positional index into a table that grows
+    is a test that lies rather than one that fails.
+    """
+    lines = out.splitlines()
+    header = next(line for line in lines if line.startswith("| quantile"))
+    index = [cell.strip() for cell in header.split("|")].index(name)
+    return [
+        float(line.split("|")[index].strip().replace(",", ""))
+        for line in lines
+        if line.startswith("| 0.")
+    ]
+
+
 def test_frontier_costs_more_stock_for_more_service(
     data_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The curve has to slope, or the table is decoration."""
     assert main(["frontier", "--data", str(data_file)]) == 0
-    rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("| 0.")]
-    held = [float(row.split("|")[8].strip().replace(",", "")) for row in rows]
+    held = _column(capsys.readouterr().out, "mean_on_hand")
     assert held == sorted(held)
     assert held[0] < held[-1]
+
+
+def test_frontier_charges_nothing_for_a_pipeline_it_never_opened(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR 0011 is on by default, and by default there is no lorry for it to bill."""
+    assert main(["frontier", "--data", str(data_file)]) == 0
+    assert _column(capsys.readouterr().out, "transit_cost") == pytest.approx([0.0] * 6)
+
+
+def test_frontier_bills_the_pipeline_and_can_be_told_not_to(
+    data_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The two halves of ADR 0011: charged by default, waivable for a supplier-owned pipeline."""
+    argv = ["frontier", "--data", str(data_file), "--lead-time", "7"]
+    assert main(argv) == 0
+    out = capsys.readouterr().out
+    assert "transit charged at 1.0/unit/day" in out
+    assert all(cost > 0.0 for cost in _column(out, "transit_cost"))
+
+    assert main([*argv, "--transit-holding-cost", "0"]) == 0
+    free = capsys.readouterr().out
+    assert _column(free, "transit_cost") == pytest.approx([0.0] * 6)
+
+
+def test_frontier_rejects_a_negative_transit_rate_before_it_trains_anything(
+    data_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "lightgbm", None)
+    argv = ["frontier", "--data", str(data_file), "--transit-holding-cost", "-1"]
+    assert main(argv) == 1
+    assert "error: --transit-holding-cost cannot be negative" in capsys.readouterr().err
 
 
 def test_frontier_without_lightgbm_says_what_to_install(

@@ -102,6 +102,14 @@ def _parser() -> argparse.ArgumentParser:
         "protection interval",
     )
     p_frontier.add_argument(
+        "--transit-holding-cost",
+        type=float,
+        default=None,
+        help="per-unit per-day charge on stock in transit; defaults to the on-hand rate, "
+        "and 0 prices a supplier-owned pipeline where the goods are not yours until "
+        "they land",
+    )
+    p_frontier.add_argument(
         "--model",
         default=GbmQuantileForecaster.name,
         choices=(GbmQuantileForecaster.name, ConformalQuantileForecaster.name),

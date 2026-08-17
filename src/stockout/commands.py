@@ -120,6 +120,8 @@ def run_frontier(args: argparse.Namespace) -> int:
         raise BacktestError("--review-period must be at least 1 day")
     if args.lead_time < 0:
         raise BacktestError("--lead-time cannot be negative")
+    if args.transit_holding_cost is not None and args.transit_holding_cost < 0:
+        raise BacktestError("--transit-holding-cost cannot be negative")
 
     fold, train, test = _newest_fold(args)
 
@@ -139,13 +141,15 @@ def run_frontier(args: argparse.Namespace) -> int:
         review_period_days=args.review_period,
         holding_cost=overage,
         shortage_cost=underage,
+        transit_holding_cost=args.transit_holding_cost,
     )
 
+    transit_rate = overage if args.transit_holding_cost is None else args.transit_holding_cost
     system = (
         "single-period stocking"
         if args.lead_time == 0
         else f"{args.lead_time}d lead time, sized across a {args.lead_time + 1}d "
-        "protection interval"
+        f"protection interval, transit charged at {transit_rate:.1f}/unit/day"
     )
     target = critical_ratio(underage_cost=underage, overage_cost=overage)
     print(

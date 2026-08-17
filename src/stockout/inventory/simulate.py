@@ -25,6 +25,11 @@ this repository walked into once: a level sized to survive a wait, refilled dail
 instant delivery, is permanent overstock, and every service level saturates at a fill rate
 of 1.0 with no trade-off left to see. ADR 0010 records the pipeline and what it costs.
 
+**The pipeline is charged for.** Goods on a lorry are committed capital earning nothing, so
+`transit_holding_cost` bills them by default at the same rate as the shelf. On a seven-day
+lead time the lorry carries roughly eight times what the shop does, so leaving it free was
+never a rounding error — ADR 0011, which also explains why charging it moves no ranking.
+
 **The honesty note that must survive into the README.** Rossmann records store-level
 revenue, not SKU units, and has no inventory column at all. Demand and stock here are
 therefore both in currency units of stock-at-cost, which is internally consistent and is
@@ -65,9 +70,14 @@ class SimulationResult:
     mean_on_order: float = 0.0
     """Mean stock in transit. Zero without a lead time, and the evidence of one with it."""
 
+    transit_cost: float = 0.0
+    """What carrying the pipeline cost. Defaulted, and therefore listed after the fields
+    that are not, which is the one place this dataclass reads out of order: it belongs
+    beside `holding_cost` and cannot sit there. Zero without a lead time — ADR 0011."""
+
     @property
     def total_cost(self) -> float:
-        return self.holding_cost + self.shortage_cost
+        return self.holding_cost + self.transit_cost + self.shortage_cost
 
 
 def simulate(
@@ -79,10 +89,11 @@ def simulate(
     initial_stock: float = 0.0,
     holding_cost: float = DEFAULT_OVERAGE_COST,
     shortage_cost: float = DEFAULT_UNDERAGE_COST,
+    transit_holding_cost: float | None = None,
 ) -> SimulationResult:
     """Walk the inventory forward day by day under an order-up-to policy.
 
-    Three modelling decisions, made explicitly:
+    Four modelling decisions, made explicitly:
 
     1. **Unmet demand is lost, not backordered.** Retail walk-outs do not queue, so a
        shortfall never reappears as tomorrow's demand. Shortage cost is therefore a
@@ -97,9 +108,16 @@ def simulate(
        lead time to open the pipeline and price an `(R, S)` system instead — ADR 0010,
        and note that `order_up_to` must then be a *protection-interval* level rather than
        one day's quantile, or the shelf will be permanently short.
+    4. **Stock in transit is charged for.** Goods on a lorry are capital already
+       committed that is earning nothing, so `transit_holding_cost` defaults to the
+       on-hand rate rather than to zero. Pass `0.0` for a supplier-owned pipeline, where
+       the goods are not yours until they land. ADR 0011, and note it can only bite when
+       there is a lead time to create a pipeline in the first place.
 
-    Costs are per unit: `holding_cost` for each unit still on the shelf at the end of a
-    day, `shortage_cost` for each unit of demand that walked out unserved.
+    Costs are per unit per day: `holding_cost` for each unit still on the shelf at the
+    end of a day, `transit_holding_cost` for each unit still on the water, and
+    `shortage_cost` — once, not per day — for each unit of demand that walked out
+    unserved.
     """
     if len(demand) != len(order_up_to):
         raise ValueError("demand and order-up-to levels must be the same length")
@@ -109,6 +127,15 @@ def simulate(
         raise ValueError("review period must be at least 1 day")
     if initial_stock < 0:
         raise ValueError("initial stock cannot be negative")
+    if transit_holding_cost is not None and transit_holding_cost < 0:
+        raise ValueError("transit holding cost cannot be negative")
+
+    # None means "the same as the shelf", which is an upper bound on the true financing
+    # cost rather than an estimate of it: on-hand also buys warehouse space, insurance and
+    # shrinkage, and a lorry buys none of those. The honest alternatives were this or a
+    # fraction picked out of the air, and a magic constant with a story attached is what
+    # ADR 0009 already refused once.
+    transit_rate = holding_cost if transit_holding_cost is None else transit_holding_cost
 
     wanted = demand.to_numpy(dtype="float64")
     levels = order_up_to.to_numpy(dtype="float64")
@@ -121,7 +148,7 @@ def simulate(
     arrivals = np.zeros(len(wanted) + lead_time_days + 1, dtype="float64")
     on_hand = float(initial_stock)
     on_order = 0.0
-    served_total = holding_total = shortage_total = 0.0
+    served_total = holding_total = shortage_total = transit_total = 0.0
     end_of_day: list[float] = []
     in_transit: list[float] = []
     was_short: list[bool] = []
@@ -144,6 +171,9 @@ def simulate(
 
         served_total += served
         holding_total += on_hand * holding_cost
+        # Charged on what is still on the water at the end of the day, which is the same
+        # instant the shelf is charged on. An order placed today is in transit today.
+        transit_total += on_order * transit_rate
         shortage_total += shortfall * shortage_cost
         end_of_day.append(on_hand)
         in_transit.append(on_order)
@@ -160,6 +190,7 @@ def simulate(
         shortage_cost=shortage_total,
         mean_on_hand=float(np.mean(end_of_day)) if end_of_day else 0.0,
         mean_on_order=float(np.mean(in_transit)) if in_transit else 0.0,
+        transit_cost=transit_total,
     )
 
 
