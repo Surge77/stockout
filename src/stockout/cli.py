@@ -22,8 +22,8 @@ from .errors import BacktestError, StockoutError
 from .evaluate.backtest import backtest
 from .evaluate.metrics import coverage_table
 from .evaluate.report import calibration_to_markdown, frontier_to_markdown, to_markdown
+from .inventory.frontier import frontier
 from .inventory.policy import critical_ratio
-from .inventory.simulate import frontier
 from .models import FORECASTER_NAMES, forecaster
 from .models.conformal import ConformalQuantileForecaster, QuantileModel
 from .models.gbm import GbmQuantileForecaster
