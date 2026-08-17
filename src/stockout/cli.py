@@ -1,4 +1,4 @@
-"""`stockout fetch | synth | describe | backtest | calibration | frontier`.
+"""`stockout fetch | synth | describe | backtest`.
 
 This module is the argument surface and nothing else: what each subcommand accepts, what
 it defaults to, and which handler in `commands.py` receives it. Keeping the two apart
@@ -19,16 +19,12 @@ from pathlib import Path
 from . import config
 from .commands import (
     run_backtest,
-    run_calibration,
     run_describe,
     run_fetch,
-    run_frontier,
     run_synth,
 )
 from .errors import StockoutError
 from .models import FORECASTER_NAMES
-from .models.conformal import ConformalQuantileForecaster
-from .models.gbm import GbmQuantileForecaster
 
 
 def _force_utf8_output() -> None:
@@ -75,77 +71,6 @@ def _parser() -> argparse.ArgumentParser:
         help="fixed-width training window instead of an expanding one",
     )
 
-    p_frontier = sub.add_parser(
-        "frontier", help="price each service level by the stock and lost sales it implies"
-    )
-    p_frontier.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
-    p_frontier.add_argument(
-        "--store", type=int, default=None, help="defaults to the first store in the file"
-    )
-    p_frontier.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
-    p_frontier.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
-    p_frontier.add_argument(
-        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
-    )
-    p_frontier.add_argument(
-        "--review-period",
-        type=int,
-        default=config.DEFAULT_REVIEW_PERIOD_DAYS,
-        help="cycle length for the service-level column; does not change what is ordered",
-    )
-    p_frontier.add_argument(
-        "--lead-time",
-        type=int,
-        default=0,
-        help="days between placing an order and its arrival; 0 prices a repeated "
-        "newsvendor, above 0 opens a delivery pipeline and sizes across the "
-        "protection interval",
-    )
-    p_frontier.add_argument(
-        "--transit-holding-cost",
-        type=float,
-        default=None,
-        help="per-unit per-day charge on stock in transit; defaults to the on-hand rate, "
-        "and 0 prices a supplier-owned pipeline where the goods are not yours until "
-        "they land",
-    )
-    p_frontier.add_argument(
-        "--model",
-        default=GbmQuantileForecaster.name,
-        choices=(GbmQuantileForecaster.name, ConformalQuantileForecaster.name),
-    )
-
-    p_calibration = sub.add_parser(
-        "calibration", help="does each quantile cover the share of days it claims to"
-    )
-    p_calibration.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
-    p_calibration.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
-    p_calibration.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
-    p_calibration.add_argument(
-        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
-    )
-    p_calibration.add_argument(
-        "--by",
-        choices=("store", "month"),
-        default=None,
-        help="also break coverage down by group, because a marginal average correct on "
-        "every row can be wrong on every store",
-    )
-    p_calibration.add_argument(
-        "--calibrate-by",
-        choices=("store",),
-        default=None,
-        help="learn a separate offset per store (Mondrian) instead of one pooled offset. "
-        "Only `store` is offered: a month-shaped group cannot be corrected, because the "
-        "calibration window contains none of the months being predicted",
-    )
-    p_calibration.add_argument(
-        "--no-refit",
-        action="store_true",
-        help="serve the probe rather than refitting on the whole window, so the offsets "
-        "describe the model that produced them and the split-conformal theorem applies "
-        "to it. Costs the most recent horizon of training data",
-    )
     return parser
 
 
@@ -159,8 +84,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "synth": run_synth,
         "describe": run_describe,
         "backtest": run_backtest,
-        "frontier": run_frontier,
-        "calibration": run_calibration,
     }
     try:
         return handlers[args.command](args)

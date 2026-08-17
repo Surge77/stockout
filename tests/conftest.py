@@ -17,52 +17,6 @@ import pytest
 from stockout.data import schemas as s
 from stockout.data.loaders import write_sales
 from stockout.data.synth import make_sales
-from stockout.models.conformal import ConformalQuantileForecaster
-
-CALIBRATION_HORIZON = 42
-
-
-class FlatQuantileModel:
-    """Predicts the same number for every row, whatever it is fitted on.
-
-    Useless as a forecaster and ideal as a fixture: the residual for every row is
-    `sales - constant`, so the offset a correct implementation must produce can be
-    computed by hand from the fixture's own sales column.
-
-    Lives here rather than in one test module because three of them need it — the
-    marginal correction, the grouped one and the un-refitted one — which is the point at
-    which the duplication stops being cheaper than the import.
-    """
-
-    name = "flat"
-
-    def __init__(self, *, levels: dict[str, float]) -> None:
-        self.levels = levels
-        self.quantiles = tuple(float(q) for q in levels)
-        self.crossing_rate = 0.0
-        self.fitted_rows = 0
-
-    def fit(self, train: pd.DataFrame) -> FlatQuantileModel:
-        self.fitted_rows = len(train)
-        return self
-
-    def predict(self, future: pd.DataFrame) -> pd.Series:
-        return pd.Series(1.0, index=future.index)
-
-    def predict_quantiles(self, future: pd.DataFrame) -> pd.DataFrame:
-        return pd.DataFrame(
-            {name: pd.Series(value, index=future.index) for name, value in self.levels.items()},
-            index=future.index,
-        )
-
-
-def flat_calibrator(**levels: float) -> ConformalQuantileForecaster:
-    """A calibrator wrapping a flat model, with a scale of 1 so offsets read directly."""
-    return ConformalQuantileForecaster(
-        horizon=CALIBRATION_HORIZON,
-        calibration_days=10,
-        factory=lambda: FlatQuantileModel(levels=levels),
-    )
 
 
 def one_store_frame(sales: list[float], *, open_flags: list[int] | None = None) -> pd.DataFrame:

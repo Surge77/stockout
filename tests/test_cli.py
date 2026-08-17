@@ -62,16 +62,6 @@ def test_an_unknown_model_is_rejected_by_the_parser(data_file: Path) -> None:
     assert excinfo.value.code == 2
 
 
-def test_backtest_runs_the_gradient_boosted_model_and_reports_beating_the_baseline(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The model is reachable from the command line, not only from a notebook."""
-    assert main(["backtest", "--data", str(data_file), "--model", "gbm", "--folds", "2"]) == 0
-    out = capsys.readouterr().out
-    assert "`gbm`" in out
-    assert "beats seasonal-naive" in out
-
-
 def test_a_missing_data_file_is_a_one_line_error_not_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -82,7 +72,10 @@ def test_a_missing_data_file_is_a_one_line_error_not_a_traceback(
 def test_too_many_folds_is_a_one_line_error(
     data_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["backtest", "--data", str(data_file), "--folds", "40"]) == 1
+    # 730 days of fixture, 365 of which the minimum training window claims. At the
+    # seven-day default horizon that leaves room for 52 folds, so 60 is the ask that
+    # cannot be met.
+    assert main(["backtest", "--data", str(data_file), "--folds", "60"]) == 1
     assert "cannot support" in capsys.readouterr().err
 
 

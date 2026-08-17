@@ -19,6 +19,7 @@ from typing import TypeAlias
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import r2_score as sk_r2_score
 
 #: Anything `np.asarray` can turn into a float vector. Plain lists are included on
 #: purpose: a metric test reads better with literal numbers than with constructors.
@@ -73,6 +74,23 @@ def rmspe(y_true: ArrayLike, y_pred: ArrayLike) -> float:
     return float(np.sqrt(np.mean(ratio**2)))
 
 
+def r2(y_true: ArrayLike, y_pred: ArrayLike) -> float:
+    """Coefficient of determination — the share of variance the model explains.
+
+    Reported because it is the metric the course teaches and the one a reader expects,
+    and because it makes every model here comparable to the notebooks it came from.
+    It is *not* the metric that decides anything, for one reason worth saying out loud:
+    pooled across 1115 stores, most of the variance in `sales` is variance *between*
+    stores, not within them. A model that learns only "store 262 is busy and store 307
+    is quiet" scores well on this and forecasts nothing. WMAPE and MASE are scored on
+    the part that is actually hard. ADR 0005.
+
+    Delegates to scikit-learn rather than reimplementing the formula: the definition is
+    not in dispute, and a hand-rolled copy is one more thing to keep correct.
+    """
+    return float(sk_r2_score(_as_array(y_true), _as_array(y_pred)))
+
+
 def mase(y_true: ArrayLike, y_pred: ArrayLike, *, y_baseline: ArrayLike) -> float:
     """Model MAE divided by the baseline's MAE over the same window.
 
@@ -83,117 +101,3 @@ def mase(y_true: ArrayLike, y_pred: ArrayLike, *, y_baseline: ArrayLike) -> floa
     if baseline_error == 0.0 or np.isnan(baseline_error):
         return float("nan")
     return mae(y_true, y_pred) / baseline_error
-
-
-def pinball(y_true: ArrayLike, y_pred: ArrayLike, *, tau: float) -> float:
-    """Quantile (pinball) loss at level `tau`.
-
-    Asymmetric by design: at tau=0.9 an under-forecast costs nine times an over-forecast,
-    which is what makes it the right loss for a service-level target.
-    """
-    if not 0.0 < tau < 1.0:
-        raise ValueError("tau must lie strictly between 0 and 1")
-    actual, predicted = _as_array(y_true), _as_array(y_pred)
-    if actual.size == 0:
-        return float("nan")
-    error = actual - predicted
-    return float(np.mean(np.maximum(tau * error, (tau - 1.0) * error)))
-
-
-def coverage(y_true: ArrayLike, y_upper: ArrayLike) -> float:
-    """Share of actuals at or below `y_upper`.
-
-    The calibration check for a quantile forecast: a well-calibrated 0.9 quantile is
-    exceeded 10% of the time. A model whose 0.9 covers 99% is not conservative, it is
-    wrong, and it will carry stock nobody needed.
-    """
-    actual, upper = _as_array(y_true), _as_array(y_upper)
-    if actual.size == 0:
-        return float("nan")
-    return float(np.mean(actual <= upper))
-
-
-def coverage_table(y_true: ArrayLike, quantile_forecasts: pd.DataFrame) -> pd.DataFrame:
-    """Nominal against empirical coverage, one row per fitted quantile.
-
-    The single table that says whether a service level is a service level. `gap` is
-    signed on purpose — negative is the dangerous direction, because a level that
-    under-covers sells a promise it does not keep, and the shortage cost lands on the
-    business rather than in the metric.
-
-    The quantile is read from the column label, so a column that is not a number becomes
-    NaN in the `nominal` column rather than crashing a report.
-    """
-    if quantile_forecasts.shape[1] == 0:
-        raise ValueError("no quantile forecasts to score")
-
-    rows = []
-    for name in quantile_forecasts.columns:
-        nominal = _as_quantile(name)
-        empirical = coverage(y_true, quantile_forecasts[name])
-        rows.append(
-            {
-                "quantile": nominal,
-                "empirical": empirical,
-                "gap": empirical - nominal,
-                "pinball": pinball(y_true, quantile_forecasts[name], tau=nominal)
-                if 0.0 < nominal < 1.0
-                else float("nan"),
-            }
-        )
-    return pd.DataFrame(rows, columns=["quantile", "empirical", "gap", "pinball"])
-
-
-def coverage_by_segment(
-    y_true: ArrayLike, quantile_forecasts: pd.DataFrame, *, segment: ArrayLike
-) -> pd.DataFrame:
-    """`coverage_table` again, once per group, so a marginal average cannot hide a group.
-
-    The table `coverage_table` produces is a *marginal* statement: correct on average
-    across every row it was given. Averages conceal. Two stores, one covered on every day
-    and one covered on six days in ten, average to exactly the nominal 0.8 and report a
-    gap of zero — and neither store is covered at 0.8. That is not a hypothetical; it is
-    the cost ADR 0009 wrote down and could not see, and this function is how it becomes
-    visible. ADR 0012.
-
-    One row per segment and quantile, ordered by segment so two runs agree. `rows` is
-    reported because a group of three rows cannot measure a 0.9 and a reader has to be
-    able to discount it — the same reason `ConformalQuantileForecaster.calibration_rows`
-    is public rather than policed.
-
-    `segment` is aligned positionally, like every other pairing in this module. Two series
-    describing the same rows but sliced differently would otherwise align into silent
-    NaNs, which is the failure this raises on instead.
-    """
-    if quantile_forecasts.shape[1] == 0:
-        raise ValueError("no quantile forecasts to score")
-
-    actual = _as_array(y_true)
-    groups = np.asarray(segment)
-    if groups.size != actual.size:
-        raise ValueError("the segment and the actuals must be the same length")
-
-    rows = []
-    for name in sorted(set(groups.tolist())):
-        inside = groups == name
-        for column in quantile_forecasts.columns:
-            nominal = _as_quantile(column)
-            predicted = np.asarray(quantile_forecasts[column], dtype="float64")[inside]
-            empirical = coverage(actual[inside], predicted)
-            rows.append(
-                {
-                    "segment": name,
-                    "quantile": nominal,
-                    "rows": int(inside.sum()),
-                    "empirical": empirical,
-                    "gap": empirical - nominal,
-                }
-            )
-    return pd.DataFrame(rows, columns=["segment", "quantile", "rows", "empirical", "gap"])
-
-
-def _as_quantile(name: object) -> float:
-    try:
-        return float(str(name))
-    except ValueError:
-        return float("nan")

@@ -1,42 +1,42 @@
-"""Forecasters: three baselines, the gradient-boosted models, and the calibrated one.
+"""The model registry: what `--model` on the command line is allowed to say.
 
-The baselines import cleanly on a bare install. The gradient-boosted models construct on
-one too — LightGBM is imported inside `fit`, so listing a model is never the same thing
-as requiring its dependency, and `--model gbm` can appear in `--help` on a machine that
-cannot run it.
+Two families live here and they answer different questions.
+
+**Baselines** (`baselines.py`) are per-store rules with no fitting worth the name —
+same-weekday-last-week, last value, trailing mean. They exist to give every other
+number something to be compared against. A gradient-boosted R² of 0.88 means nothing
+until you know what a rule a shopkeeper could apply in their head scores.
+
+**Pipelines** (`linear.py`, `trees.py`, `kernels.py`, `classifiers.py`) are
+scikit-learn estimators wrapped in a `Pipeline` behind the shared preprocessor. They
+are registered by name so the CLI, the notebooks and the comparison table all read
+from one list rather than three that drift apart.
+
+The registry maps a name to a *factory*, never to an instance. `evaluate/backtest.py`
+builds a fresh model per fold, and reusing a fitted object across folds leaks the
+previous fold's fit into the next one — quietly, because the scores only improve a
+little.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
 from .baselines import BASELINES
-from .conformal import ConformalQuantileForecaster
-from .gbm import GbmForecaster, GbmQuantileForecaster
-
-#: Models that must be told the horizon they are forecasting at, because their features
-#: depend on it. The baselines are not here: same-weekday-last-week is the same rule at
-#: every horizon, so there is nothing for them to do with the number.
-_HORIZON_AWARE: dict[str, type] = {
-    GbmForecaster.name: GbmForecaster,
-    GbmQuantileForecaster.name: GbmQuantileForecaster,
-    ConformalQuantileForecaster.name: ConformalQuantileForecaster,
-}
 
 #: Every name the CLI accepts. Sorted so `--help` does not reorder between runs.
-FORECASTER_NAMES: tuple[str, ...] = tuple(sorted({*BASELINES, *_HORIZON_AWARE}))
+FORECASTER_NAMES: tuple[str, ...] = tuple(sorted(BASELINES))
 
 
 def forecaster(name: str, *, horizon: int) -> Callable[[], Any]:
     """A zero-argument factory for `name`.
 
-    A factory rather than an instance, because `backtest` builds a fresh model per fold
-    and reusing a fitted one leaks the previous fold's fit into the next.
+    `horizon` is accepted for every model and used by those whose features depend on
+    it. The baselines ignore it: same-weekday-last-week is the same rule at a
+    seven-day horizon as at a forty-two-day one, so there is nothing for them to do
+    with the number.
     """
     if name in BASELINES:
         return BASELINES[name]
-    if name in _HORIZON_AWARE:
-        return partial(_HORIZON_AWARE[name], horizon=horizon)
     raise KeyError(f"unknown forecaster {name!r}; choose from {', '.join(FORECASTER_NAMES)}")

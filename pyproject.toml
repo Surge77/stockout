@@ -5,17 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stockout"
 version = "0.4.0"
-description = "Retail demand forecasting scored by the decision it drives — replenishment — with rolling-origin backtesting and leakage guards that fail the test suite, not the code review."
+description = "Retail sales regression and demand classification on Rossmann, with the cost of a shuffled split measured rather than asserted."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "TEJAS", email = "tejasdeshmane66@gmail.com" }]
 keywords = [
     "time-series",
-    "forecasting",
+    "regression",
+    "classification",
+    "scikit-learn",
     "demand-forecasting",
-    "backtesting",
-    "inventory",
     "retail",
 ]
 classifiers = [
@@ -33,24 +33,26 @@ classifiers = [
 # kaggle is a runtime dependency rather than an extra because `stockout fetch` is a
 # first-class command, not an optional convenience. It is the only dependency that
 # ever opens a socket, and nothing under tests/ is allowed to reach it.
+#
+# scikit-learn is a runtime dependency, not an extra. Every model in the package is
+# one, so a `pip install -e .` that cannot fit anything would install a CLI with no
+# verbs. LightGBM used to sit behind a `gbm` extra for exactly the opposite reason and
+# has been removed — ADR 0018.
 dependencies = [
     "pandas==2.2.3",
     "numpy==2.4.3",
     "matplotlib==3.10.8",
+    "scikit-learn==1.9.0",
+    "joblib==1.5.3",
+    "pyarrow==25.0.1",
     "kaggle==2.2.4",
     "python-dotenv==1.2.2",
 ]
 
 [project.optional-dependencies]
-# LightGBM stays behind an extra because the spine does not depend on a model
-# existing: `pip install -e .` still fetches, describes and backtests the baselines,
-# and `stockout frontier` is the only command that needs this.
-gbm = ["lightgbm==4.7.0"]
+# seaborn is notebook-only: it styles exploratory charts and nothing in src/ imports it.
+notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0", "seaborn==0.13.2"]
 dev = [
-    # Self-referencing, so the pin lives in exactly one place. Development installs
-    # LightGBM because the gradient-boosted models are now real code, and code that CI
-    # cannot execute is code CI cannot measure.
-    "stockout[gbm]",
     "pytest==9.0.3",
     "pytest-cov==7.1.0",
     "ruff==0.16.3",
@@ -58,7 +60,6 @@ dev = [
     "pandas-stubs==3.0.5.260730",
     "hypothesis==6.165.6",
 ]
-notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0"]
 
 [project.urls]
 Homepage = "https://github.com/Surge77/stockout"
