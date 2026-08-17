@@ -149,10 +149,15 @@ def _categorical_branch(drop_first: bool) -> Pipeline:
             # frequent level. "we do not know this store's type" is not evidence that it
             # is the commonest type, and the encoder can learn from the marker directly.
             ("impute", SimpleImputer(strategy="constant", fill_value="unknown")),
+            # `handle_unknown="ignore"` regardless of `drop_first`: a level the training
+            # fold never saw becomes a row of zeros rather than an exception, which is
+            # what a served request needs. sklearn warns when it happens, and that
+            # warning is worth keeping — an unseen store type at serving time is a real
+            # event, not noise.
             (
                 "encode",
                 OneHotEncoder(
-                    handle_unknown="ignore" if not drop_first else "infrequent_if_exist",
+                    handle_unknown="ignore",
                     drop="first" if drop_first else None,
                     sparse_output=False,
                 ),
