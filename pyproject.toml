@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockout"
-version = "0.4.0"
+version = "0.5.0"
 description = "Retail sales regression and demand classification on Rossmann, with the cost of a shuffled split measured rather than asserted."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -7,17 +7,110 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Planned
 
-- Answers to the five questions in `docs/questions.md`, which need the real Rossmann file
-  and nothing else — every cell that produces them runs. **This is the only thing left that
-  the repository set out to do**, and it is blocked on a Kaggle account and an accepted set
-  of competition rules rather than on any code
-- Coarser calibration groups. ADR 0012's per-store correction needs 199 rows a store for a
-  0.99 grid and Rossmann has about 36, so the usable unit is a cluster of stores — and no
-  clustering exists here to build one from
-- Conditional coverage *by season*, which ADR 0012 shows can be measured and argues cannot
-  be corrected: the calibration window holds none of the months being predicted
-- A charge for shortening the lead time. ADR 0011 prices holding the pipeline and still
-  knows nothing about what expedited freight or a closer supplier would cost
+- Answers to the five questions on **real** data. They are answered on the generator now,
+  and three of the five came out flat or negative for reasons that are properties of the
+  generator rather than of retail. This needs a Kaggle account and an accepted set of
+  competition rules rather than any code
+- Feeding the searched hyperparameters back into the registry. `tune` prints what it
+  found; `linear.py` still says `alpha=1.0`, so a reader has to run the search to learn
+  that the literal is not the searched answer. ADR 0017
+- A hierarchical or per-store model. Every scikit-learn model here is one global fit with
+  `store` as a feature, which pools incidentally and shares nothing deliberately — and Q2
+  cannot test whether that is the right call on four stores
+- Something to replace the decision layer ADR 0014 removed. Accuracy is not what a
+  replenishment decision is graded on, and nothing here now says what a forecast costs
+
+## [0.5.0] — 2026-08-18
+
+The scikit-learn curriculum, finished: the registry reaches the command line, the notebook
+runs again, and every document describes the package that ships. Three of the five
+committed questions lost, which is reported at the top of `docs/results.md` rather than
+somewhere further down.
+
+### Added
+
+- **Six subcommands, and one widened.** `compare` runs the whole registry against one
+  holdout and names a winner; `leakage` prints the four-arm decomposition with its optimism
+  column; `tune` grid searches over time-ordered folds; `prepare` builds and caches the
+  model frame; `train` fits both tasks on everything and writes one artifact; `predict`
+  reads it back and answers one store-day. `backtest --model` now accepts every registered
+  regressor as well as the three baselines. Twelve regressors and nine classifiers were
+  previously reachable only from a library import — and `persistence.py` told a failed load
+  to run `python -m stockout train`, which did not exist.
+- **Every model command routes through `dataset.prepare`**, which is what that module's
+  docstring already claimed. That needed `--stores`: the real data is two files, four
+  features come from the join, and `prepare` refuses to proceed without it rather than
+  silently producing a frame with no categorical branch.
+- **`--gap-days` defaults to the horizon**, not to zero. A holdout whose training rows end
+  the day before its test rows begin is scoring a one-day forecast however long the horizon
+  claims to be.
+- **ADRs 0014 to 0020.** Four of them (0015, 0017, 0018, 0019) were cited from `src/` and
+  `pyproject.toml` in eight places and had never been written. Each carries the measurement
+  its argument rests on rather than the argument alone.
+- **`tests/test_notebook.py`**, which execs every code cell into one namespace, checks each
+  question wrote its figure, and asserts the notebook's question headings match the
+  committed ones. No kernel: an `.ipynb` is JSON, and neither `nbclient` nor `ipykernel` is
+  installed.
+
+### Changed
+
+- **`notebooks/01_explore.ipynb` rebuilt.** It imported six modules deleted by the previous
+  release and raised on its first cell. Q5 no longer needs the inventory simulator — it now
+  asks whether the classifier beats binning the regression, which is the question
+  `predict._label` already leans on.
+- **`docs/questions.md` says plainly that Q5 was rewritten after the comparison table
+  existed**, and that Q1 to Q4 were not. A file whose whole point is that the questions
+  predate the charts has to disclose the one that does not.
+- **README, MODEL_CARD, architecture, glossary and results rewritten** against what runs,
+  with every number regenerated. The README's three headline commands all exited 2; the
+  glossary defined nine inventory terms the package no longer contains; the results file's
+  leakage table quoted numbers no invocation reproduces.
+- **CI's smoke job asserted two commands that no longer exist.** It ran `frontier` and
+  `calibration`, grepped their stderr for a LightGBM install hint, and could only fail.
+  Replaced with assertions about the current surface, including one that fails if a
+  registered model is not offered by `--model`.
+- **ADRs 0007 to 0013 keep their text and gain a supersession banner** naming 0014. A
+  decision log edited to match the present is not a log.
+
+### Fixed
+
+- **A fold in which nobody runs a continuing promotion crashed the vectoriser.**
+  `TfidfVectorizer` learned its vocabulary from the training documents, so a slice with no
+  month tokens raised `empty vocabulary; perhaps the documents only contain stop words`
+  four frames inside a `ColumnTransformer`. That is what fitting on a single store looks
+  like, which the notebook does in Q2. The vocabulary is now fixed to
+  `store_features.MONTH_TOKENS` — twelve months are a closed set known before any data is
+  read — and the branch emits the same columns in the same order every fold. Identical
+  output on the full sample.
+- **`SimpleImputer` silently dropped a column with no observed values**, warning from four
+  frames down. A store that has never run the promotion has `promo2_since_week` and
+  `promo2_since_year` entirely null, and two features vanished from its matrix.
+  `keep_empty_features=True` keeps them at zero instead.
+
+  Both are the same bug in two branches: a transformer whose output width depends on which
+  rows happened to land in the fold. Both were found by writing the notebook rather than by
+  a test, and both now have one.
+
+### Notes
+
+- **The model ladder is flat, and that is the headline.** Twelve regressors land within
+  0.01 WMAPE of each other; at four decimal places `linear` and the winner are the same
+  number, 0.0899 each; `bagging` spends 7.7 seconds to finish below both. On a generator
+  whose promotion calendar and weekday pattern are deterministic, a linear model on the
+  right features is the correct answer, and reporting otherwise would be inventing a result.
+- **Three of the five questions lost.** Accuracy does not decay with horizon here
+  (0.0849 → 0.0835 → 0.0875 across 7 to 42 days, which was the stated failure condition);
+  the fitted model beats the baseline on every store including the quiet ones; and the
+  promotion wake is a −1.8% dip against a +24.5% lift, which is a reversal on the letter
+  and barely on the substance. Q3 and Q5 held.
+- **Q4's first answer was wrong and the write-up keeps it.** The wake counter ran straight
+  through the following promotion and reported +22% persistence on days 7 and 8 — entirely
+  the next cycle's lift. The counter now resets on any promotion day.
+- **The leakage decomposition still finds almost nothing.** The shuffled split is optimistic
+  by 0.0718 against the honest arm's 0.0566, and the preprocessing leak differs in the
+  fourth decimal. Only the smuggled-`customers` arm is dramatic, at 0.998 with a *negative*
+  optimism — a protocol not lying about its own error at all, attached to a model that is
+  undeployable the same afternoon.
 
 ## [0.4.0] — 2026-08-17
 
@@ -215,7 +308,9 @@ First scaffold. The spine runs end to end; the learned models do not exist yet.
 - Stubs (`models/gbm.py`, `inventory/`) carry their reasoning and their skipped tests, so
   the specification is on record before the implementation.
 
-[Unreleased]: https://github.com/Surge77/stockout/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Surge77/stockout/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Surge77/stockout/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Surge77/stockout/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Surge77/stockout/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Surge77/stockout/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Surge77/stockout/releases/tag/v0.1.0
