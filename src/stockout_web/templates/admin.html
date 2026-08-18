@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Admin — stockout{% endblock %}
+{% block content %}
+
+<h1>Admin</h1>
+
+{% if trained %}<p class="alert ok">Trained. {{ trained }}</p>{% endif %}
+
+<div class="grid">
+  <div class="card">
+    <h2>Deployed model</h2>
+    {% if artifact %}
+      <table class="kv">
+        <tr><th>Trained</th><td>{{ artifact.trained_at }}</td></tr>
+        <tr><th>Training rows</th><td>{{ "{:,}".format(artifact.training_rows) }}</td></tr>
+        <tr><th>Horizon</th><td>{{ artifact.horizon }} days</td></tr>
+        <tr><th>Features</th><td>{{ artifact.feature_columns|length }}</td></tr>
+        <tr><th>Stores served</th><td>{{ stores|length }}</td></tr>
+        <tr><th>History ends</th><td>{{ last_date }}</td></tr>
+      </table>
+
+      <h3>Held-out scores</h3>
+      {% if artifact.scores %}
+        <table class="kv">
+          {% for name, value in artifact.scores.items() | sort %}
+            <tr><th>{{ name }}</th><td>{{ "%.3f"|format(value) }}</td></tr>
+          {% endfor %}
+        </table>
+        <p class="hint">
+          Measured on a window the model was scored on before being refitted on everything.
+          A score computed on the rows a model was fitted on is not a score.
+        </p>
+      {% else %}
+        <p class="hint">This artefact carries no scores.</p>
+      {% endif %}
+    {% else %}
+      <p class="alert error">No model artefact is loaded.</p>
+      {% if load_error %}<p class="hint mono">{{ load_error }}</p>{% endif %}
+    {% endif %}
+  </div>
+
+  <form class="card" method="post" action="/admin/train">
+    <h2>Train a new one</h2>
+    <p class="hint">
+      Fits both tasks on every row and replaces what users are served. Runs in a worker
+      thread, so the app keeps answering while it works &mdash; but it takes seconds, not
+      milliseconds.
+    </p>
+
+    <label>Regressor
+      <select name="regressor">
+        {% for name in regressors %}
+          <option value="{{ name }}" {% if name == default_regressor %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Classifier
+      <select name="classifier">
+        {% for name in classifiers %}
+          <option value="{{ name }}" {% if name == default_classifier %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <button type="submit">Train and deploy</button>
+    <p class="hint">
+      There is no model upload, deliberately. Loading a <code>.joblib</code> executes code
+      from it, so the artefact is only ever written by this process from data already on
+      disk.
+    </p>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Model comparison</h2>
+  <p class="hint">
+    Every registered model on one held-out window, in registry order &mdash; simplest
+    first. A table sorted by score answers <em>which won</em>; this order also answers
+    <em>did the extra complexity pay</em>.
+  </p>
+  <p>
+    <a class="button" href="/admin/comparison?task=regression">Compare regressors</a>
+    <a class="button" href="/admin/comparison?task=classification">Compare classifiers</a>
+  </p>
+  <p class="hint">Each run fits every model in the registry, so give it a few seconds.</p>
+</div>
+
+{% endblock %}

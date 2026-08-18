@@ -4,6 +4,13 @@ The autouse guard is the reason `pytest` is trustworthy offline. Without it a te
 accidentally reaches Kaggle passes on a laptop with a token and fails in CI, and the
 failure looks like a flake rather than a bug. Tests that genuinely need the network must
 say so with `@pytest.mark.integration`, which is excluded from the default run.
+
+**Loopback is allowed, and the distinction is the point.** The guard exists to stop a test
+*leaving the machine*, not to stop it using a socket. Python's own event loop builds its
+wake-up self-pipe with `socket.socketpair()`, which on Windows is a pair of connected
+127.0.0.1 sockets — so a blanket refusal makes `TestClient` impossible to use while
+blocking nothing a test could have reached. `tests/web/` drives the whole web app in
+process through exactly that mechanism.
 """
 
 from __future__ import annotations
@@ -38,14 +45,36 @@ def _no_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
     if request.node.get_closest_marker("integration"):
         return
 
-    def guard(*args: object, **kwargs: object) -> None:
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def is_loopback(address: object) -> bool:
+        """True for 127.0.0.0/8, ::1 and a unix socket. Nothing here leaves the machine."""
+        if not isinstance(address, tuple) or not address:
+            return True  # AF_UNIX and friends take a path, not a host/port pair
+        host = address[0]
+        return isinstance(host, str) and (
+            host in {"localhost", "::1", ""} or host.startswith("127.")
+        )
+
+    def refuse(address: object) -> None:
         raise RuntimeError(
-            "a unit test tried to open a socket; mark it @pytest.mark.integration "
+            f"a unit test tried to reach {address!r}; mark it @pytest.mark.integration "
             "or stub the boundary"
         )
 
-    monkeypatch.setattr(socket.socket, "connect", guard)
-    monkeypatch.setattr(socket.socket, "connect_ex", guard)
+    def guarded_connect(self: socket.socket, address: object) -> object:
+        if not is_loopback(address):
+            refuse(address)
+        return real_connect(self, address)  # type: ignore[arg-type]
+
+    def guarded_connect_ex(self: socket.socket, address: object) -> object:
+        if not is_loopback(address):
+            refuse(address)
+        return real_connect_ex(self, address)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
 
 
 @pytest.fixture(scope="session")

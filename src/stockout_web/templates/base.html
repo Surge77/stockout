@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}stockout{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/">stockout</a>
+  <nav>
+    {% if user %}
+      <span class="who">{{ user.email }}{% if user.is_admin %} <b class="tag">admin</b>{% endif %}</span>
+      <a href="/">Forecast</a>
+      {% if user.is_admin %}
+        <a href="/admin">Admin</a>
+        <a href="/admin/users">Users</a>
+      {% endif %}
+      <form method="post" action="/logout" class="inline">
+        <button class="link" type="submit">Sign out</button>
+      </form>
+    {% else %}
+      <a href="/login">Sign in</a>
+      <a href="/register">Register</a>
+    {% endif %}
+  </nav>
+</header>
+
+<main>
+  {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+
+<footer>
+  Forecasts and demand classes come from a model trained on
+  <strong>synthetic</strong> data. Not for real replenishment decisions.
+</footer>
+</body>
+</html>

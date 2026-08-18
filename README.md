@@ -272,6 +272,48 @@ date more than one horizon past the end of history — beyond that the model wou
 be fed its own output as an observation, and each prediction would inherit the last one's
 error.
 
+## The web app
+
+`stockout_web` is a FastAPI app over the same artifact the CLI writes: a **user** module
+that forecasts and an **admin** module that trains and manages accounts.
+
+```bash
+pip install -e ".[web]"
+python -m stockout train                     # something for it to serve
+uvicorn stockout_web.main:app --reload       # http://127.0.0.1:8000
+```
+
+The first account you register becomes the admin; every one after it is a plain user.
+Set `STOCKOUT_ADMIN_EMAIL` and `STOCKOUT_ADMIN_PASSWORD` to seed one instead — into an
+*empty* table only, so it can never reset the admin on a running system. There is no
+built-in default account, because a shipped `admin/admin` is a back door.
+
+**The user page answers both problems at once**, which is the point of it. One store-day
+in; predicted sales from the regression model and Low/Medium/High from the classification
+model out, with that store's own cut points beside them so a reader can see which side of
+the boundary the number landed on. The two are produced by different models and can
+disagree — [docs/results.md](docs/results.md) measures by how much.
+
+**The admin page** shows the deployed artefact's provenance and its held-out scores,
+retrains and redeploys with any pair from the registry, renders the whole-registry
+comparison table, and manages accounts.
+
+| Decision | Why |
+|---|---|
+| Session cookie, signed, `httpOnly`, 8 hours | A session that never expires is a credential with no end |
+| bcrypt, per-password salt | The plaintext is never stored, logged or returned; `User` has no field it could live in |
+| The role is read per request, never from the cookie | Deactivating an account or demoting an admin takes effect immediately rather than whenever a cookie expires |
+| One failure message for a wrong password and an unknown email | Distinguishing them turns the login form into an account-enumeration oracle |
+| The last active admin cannot be demoted or deactivated | Otherwise the admin module locks with no route back but editing the database |
+| Accounts are deactivated, never deleted | An account that has used the system is a fact about what happened |
+| **No model upload, and no data upload** | `joblib.load` executes what it reads. An admin picks a model by name; this process writes the file |
+| Training and comparison run in a worker thread | Seconds of CPU with no `await` in them would block every other request, including the health check |
+| The artefact and the history frame load once, at startup | Tens of megabytes and a two-CSV join — per request that is invisible in any one response and ruinous across all of them |
+
+The app starts with no model and no accounts, because that is the first-run state: an
+admin has to be able to sign in *before* there is anything to serve, so a missing artefact
+is a message on the page rather than a crash at boot.
+
 ## Data
 
 Everything above runs offline, on a committed synthetic sample. For the real thing:
@@ -325,6 +367,18 @@ src/stockout/
 └── cli.py                 fetch | synth | describe | prepare | backtest | compare
                            | leakage | tune | train | predict
 
+src/stockout_web/
+├── config.py          settings, read from the environment at call time
+├── db.py              the users table, in SQLite, with no ORM and no string-built SQL
+├── users.py           accounts, roles, and the only place a password is handled
+├── auth.py            who is asking, and may they — the two route dependencies
+├── service.py         the one seam into `stockout`; loads once, fits off the event loop
+├── templating.py      one way to render a page, so no route forgets the user in context
+├── main.py            the app: middleware, routers, and what happens once at startup
+├── routers/           auth | forecast (user) | admin — split by who may call it
+├── templates/         Jinja2, autoescaped, and nothing uses `| safe`
+└── static/            one stylesheet and a vendored htmx
+
 docs/questions.md       the five hypotheses, written first
 docs/results.md         the answers, and what didn't work
 docs/decisions/         thirteen current ADRs and seven superseded, each with its cost
@@ -338,7 +392,7 @@ reports/                generated charts — regenerated, never committed
 ```bash
 ruff check .                                  # lint only; never `ruff format` (ADR 0004)
 pyright                                       # type gate
-pytest --cov --cov-fail-under=90              # 580 passing, 1 skipped, 98% covered
+pytest --cov --cov-fail-under=90              # 672 passing, 1 skipped, 98% covered
 ```
 
 Unit tests never touch the network. A `conftest.py` autouse fixture replaces
@@ -357,6 +411,13 @@ while refusing to import the thing that shuffles.
 checks that each question wrote its figure. It needs no kernel — an `.ipynb` is JSON — and
 it exists because the previous notebook shipped importing six deleted modules and nothing
 in the suite noticed.
+
+`tests/web/` drives the whole web app in process through FastAPI's `TestClient` — no
+port, no live server, no sleep. The `stockout_web` package is held at **100%** rather than
+90%, because it is where the auth lives and a missing branch there is a way in rather than
+a number. The network guard in `conftest.py` allows loopback and refuses everything else:
+it exists to stop a test *leaving the machine*, and a blanket refusal would block the event
+loop's own self-pipe.
 
 `pyproject.toml` sets `filterwarnings = ["error"]`, so a `ConvergenceWarning` or an
 unseen-category warning is a failed test rather than a line of yellow text. Several of the

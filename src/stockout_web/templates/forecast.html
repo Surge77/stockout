@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Forecast — stockout{% endblock %}
+{% block content %}
+
+<h1>Forecast a store-day</h1>
+<p class="lede">
+  One question, two models. <strong>Regression</strong> predicts how much the store sells;
+  <strong>classification</strong> predicts whether that is a Low, Medium or High day
+  <em>for that shop</em>. Both are fitted on the same rows behind the same preprocessor.
+</p>
+
+{% if not ready %}
+  <div class="card">
+    <h2>No model is loaded</h2>
+    {% if load_error %}<p class="alert error">{{ load_error }}</p>{% endif %}
+    <p>
+      {% if user and user.is_admin %}
+        Train one from the <a href="/admin">admin page</a>.
+      {% else %}
+        An admin needs to train one before forecasts can be served.
+      {% endif %}
+    </p>
+  </div>
+{% else %}
+
+<div class="grid">
+  <form class="card" method="post" action="/forecast">
+    <h2>Ask</h2>
+
+    <label>Store
+      <select name="store" required>
+        {% for option in stores %}
+          <option value="{{ option }}" {% if store == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Date
+      <input type="date" name="date" required
+             value="{{ date or '' }}"
+             min="{{ last_date }}" max="{{ servable_until }}">
+    </label>
+    <p class="hint">
+      History ends {{ last_date }}. The model reads sales from {{ horizon }} days before the
+      day it predicts, so it can see to <strong>{{ servable_until }}</strong> and no further —
+      past that it would be reading its own output as an observation.
+    </p>
+
+    <fieldset>
+      <legend>That day&rsquo;s known facts</legend>
+      <label class="check">
+        <input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}>
+        Promotion running
+      </label>
+      <label class="check">
+        <input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}>
+        School holiday
+      </label>
+      <label class="check">
+        <input type="checkbox" name="is_open" value="true" {% if is_open is not defined or is_open %}checked{% endif %}>
+        Store open
+      </label>
+      <p class="hint">
+        These come from a planning calendar, so they are known in advance. Using them is
+        not leakage.
+      </p>
+    </fieldset>
+
+    <button type="submit">Forecast</button>
+  </form>
+
+  <div class="card">
+    <h2>Answer</h2>
+
+    {% if answer %}
+      <p class="hint">Store {{ answer.store }} on {{ answer.date }}</p>
+
+      <div class="answer regression">
+        <span class="label">Regression &mdash; predicted sales</span>
+        <span class="value">{{ "{:,.0f}".format(answer.sales) }}</span>
+      </div>
+
+      <div class="answer classification class-{{ answer.demand_class|lower }}">
+        <span class="label">Classification &mdash; demand class</span>
+        <span class="value">{{ answer.demand_class }}</span>
+      </div>
+
+      <table class="thresholds">
+        <caption>This store&rsquo;s own cut points, learned from its training window</caption>
+        <tr><th>Low</th><td>up to {{ "{:,.0f}".format(answer.low) }}</td></tr>
+        <tr><th>Medium</th><td>{{ "{:,.0f}".format(answer.low) }} &ndash; {{ "{:,.0f}".format(answer.high) }}</td></tr>
+        <tr><th>High</th><td>above {{ "{:,.0f}".format(answer.high) }}</td></tr>
+      </table>
+
+      <p class="hint">
+        The two answers are produced by two different models and can disagree. The
+        classifier optimises the boundary it is scored on; the regressor minimises squared
+        error and is pulled towards busy days. Where they differ, the cut points above show
+        by how much.
+      </p>
+    {% else %}
+      <p class="hint">Choose a store and a date, and both models will answer.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if artifact %}
+  <details class="card">
+    <summary>Which model said this</summary>
+    <p class="mono">{{ artifact.summary() }}</p>
+    <p class="hint">
+      The scores above are from a held-out window, not from the rows the deployed model was
+      fitted on &mdash; a score computed on the training rows is not a score.
+    </p>
+  </details>
+{% endif %}
+
+{% endif %}
+{% endblock %}
