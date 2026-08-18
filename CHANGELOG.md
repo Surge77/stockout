@@ -8,9 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Planned
 
 - The **loan classification task**: `Loan_Regression_Classification.xlsx` carries both
-  `Loan_Approved` (binary) and `Loan_Amount` (continuous, and zero exactly when the first
-  is), which is a paired classification-then-regression problem this package's machinery
-  can already answer and has not been pointed at
+  `Loan_Approved` (binary) and `Loan_Amount` (continuous, and zero exactly when
+  `Loan_Approved` is 0), which is a paired classification-then-regression problem this
+  package's machinery can already answer and has not been pointed at
 - Answers to the five questions on **real** data. They are answered on the generator now,
   and three of the five came out flat or negative for reasons that are properties of the
   generator rather than of retail. This needs a Kaggle account and an accepted set of
@@ -26,9 +26,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [0.6.0] — 2026-08-18
 
-The web app four docstrings had been promising. A **user** module that forecasts and an
-**admin** module that trains and manages accounts, both served from the artefact the CLI
-already wrote.
+The web app that four docstrings had been promising for two releases: a **user** module
+that forecasts and an **admin** module that trains and manages accounts, both served from
+the artefact the CLI already wrote.
 
 ### Added
 
@@ -64,6 +64,22 @@ already wrote.
 
 ### Fixed
 
+- **Two simultaneous registrations on an empty user table both became admins.** The role
+  was decided by reading `users.count(...) == 0` and then inserting, and SQLite's default
+  deferred transaction takes no lock on that read — so both requests saw zero. A privilege
+  escalation reachable by posting a form twice at once, on the one request in the system
+  that hands out administrator. The role is now decided *inside* the `INSERT`, and
+  `tests/web/test_users.py` races eight threads at it: the old code produced **8 admins**,
+  the new one produces 1.
+- **A model comparison did not take the lock training uses.** Twelve fits per request on
+  the shared executor, so two admins reloading the page together would queue two dozen
+  model fits ahead of every user's forecast. Both jobs now share one lock.
+- **`authenticate` clipped an over-length password rather than refusing it**, which meant
+  it accepted input `hash_password` would have rejected. Harmless in practice — knowing the
+  first 72 bytes *is* knowing the password — and now one rule instead of two.
+- **The workflow ran with the default read/write token persisted in `.git/config`** while
+  three of its four jobs executed repository code. `permissions: contents: read` and
+  `persist-credentials: false`.
 - **`users.normalise_email("@")` was accepted**, because the check was `"@" in address`.
   Now requires something either side, exactly one `@`, and no whitespace — a sanity check
   rather than RFC 5322 validation, and the docstring says which.

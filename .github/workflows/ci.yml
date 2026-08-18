@@ -7,6 +7,12 @@ on:
     branches: [main, develop]
   workflow_dispatch: {}
 
+# Least privilege. Nothing here writes to the repository, and three of the four jobs
+# execute code from the checkout — so the default read/write token would be sitting in
+# `.git/config` while our own code runs beside it.
+permissions:
+  contents: read
+
 concurrency:
   # A second push to the same branch makes the first run's answer irrelevant.
   group: ci-${{ github.ref }}
@@ -23,6 +29,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -56,6 +64,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -166,6 +176,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -230,6 +242,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:

@@ -70,15 +70,13 @@ async def register(
     """Create a `user` account. Never an admin — see the module docstring."""
     try:
         with db.session() as connection:
-            first_account = users.count(connection) == 0
             # The very first account to exist becomes the admin, because otherwise a
             # fresh install with no seed credentials has no way to reach the admin
-            # module at all. Every account after it is a plain user.
-            user = users.create(
-                connection,
-                email=email,
-                password=password,
-                role="admin" if first_account else "user",
+            # module at all. Every account after it is a plain user — and the decision
+            # is made *inside* the insert, because reading the count first lets two
+            # simultaneous registrations both see an empty table and both become one.
+            user = users.create_self_registered(
+                connection, email=email, password=password
             )
     except users.UserError as exc:
         return page(

@@ -77,9 +77,11 @@ class ModelService:
 
     def __init__(self) -> None:
         self.state = ModelState()
-        #: One trainer at a time. Two concurrent fits would race to write the same
-        #: artifact file and the loser would be silently discarded.
-        self._training = asyncio.Lock()
+        #: One model job at a time — training *or* comparison. Two concurrent fits
+        #: would race to write the same artifact file and the loser would be silently
+        #: discarded; and a comparison is twelve fits, so several of them arriving
+        #: together would saturate the executor and starve every user's forecast.
+        self._model_job = asyncio.Lock()
 
     # --- loading ---------------------------------------------------------------------
 
@@ -150,7 +152,7 @@ class ModelService:
         _require_known(regressor, task="regression")
         _require_known(classifier, task="classification")
 
-        async with self._training:
+        async with self._model_job:
             artifact = await _off_the_loop(self._fit, regressor, classifier)
             self.load()
             return artifact
@@ -168,8 +170,15 @@ class ModelService:
         return artifact
 
     async def comparison(self, task: Task, models: list[str] | None = None) -> pd.DataFrame:
-        """Every registered model on one holdout — the table the admin page shows."""
-        return await _off_the_loop(self._compare, task, models)
+        """Every registered model on one holdout — the table the admin page shows.
+
+        Behind the same lock as training. A comparison is twelve fits for regression and
+        nine for classification, and the executor is shared with every other request in
+        the process: two admins reloading this page at once would queue two dozen model
+        fits ahead of everybody's forecast.
+        """
+        async with self._model_job:
+            return await _off_the_loop(self._compare, task, models)
 
     def _compare(self, task: Task, models: list[str] | None) -> pd.DataFrame:
         for name in models or []:
