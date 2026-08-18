@@ -1,9 +1,9 @@
 """The command line, exercised end to end against synthetic data and no network.
 
-`frontier` and `calibration` have files of their own — they are the commands that fit
-models, and they carry most of the runtime. What is left here is the cheap surface:
-the parser, the two data commands, the baselines, and the errors that must arrive as a
-line rather than a traceback.
+The commands that fit scikit-learn pipelines live in `test_cli_commands.py` — they carry
+most of the runtime. What is left here is the cheap surface: the parser, the two data
+commands, the baselines, and the errors that must arrive as a line rather than a
+traceback.
 """
 
 from __future__ import annotations

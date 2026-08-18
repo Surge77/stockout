@@ -17,6 +17,7 @@ import pytest
 from stockout.data import schemas as s
 from stockout.data.loaders import write_sales
 from stockout.data.synth import make_sales
+from stockout.data.synth_stores import make_stores
 
 
 def one_store_frame(sales: list[float], *, open_flags: list[int] | None = None) -> pd.DataFrame:
@@ -61,11 +62,22 @@ def sales() -> pd.DataFrame:
 def data_file(tmp_path: Path) -> Path:
     """A written CSV for the CLI tests, which take a path rather than a frame.
 
-    Two stores on purpose: it is the smallest file that exercises per-store behaviour, and
-    it is small enough that its ~70 calibration rows trip the saturation warning — a
-    warning is worth nothing if it only fires when it is not needed.
+    Two stores on purpose: the smallest file that exercises per-store behaviour — the
+    per-store demand terciles, the per-store lag construction and the baselines' own
+    store-level fallbacks — while staying fast enough to run in every CLI test.
     """
     return write_sales(make_sales(n_stores=2, days=730, seed=13), tmp_path / "sales.csv")
+
+
+@pytest.fixture
+def store_file(tmp_path: Path) -> Path:
+    """The metadata half of the pair, for the commands that call `dataset.prepare`.
+
+    Written beside `data_file` and covering the same store ids. Every command that fits
+    a model needs both files, because four of the features come from the join and
+    `prepare` refuses to proceed without it rather than dropping them in silence.
+    """
+    return write_sales(make_stores(n_stores=2, seed=13), tmp_path / "stores.csv")
 
 
 @pytest.fixture

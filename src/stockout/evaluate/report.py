@@ -6,6 +6,11 @@ table is the evidence, and it survives being quoted in an issue or a commit mess
 The table is assembled by hand rather than with `DataFrame.to_markdown`, which requires
 the `tabulate` package. Twenty lines of string joining does not justify a dependency
 that would then need pinning, auditing and updating forever.
+
+`to_markdown` knows what a backtest frame contains and formats each column accordingly.
+`frame_to_markdown` knows nothing and renders whatever it is handed, which is what the
+leakage and tuning tables need — their columns are named by the experiment rather than
+by this module.
 """
 
 from __future__ import annotations
@@ -44,6 +49,28 @@ def to_markdown(results: pd.DataFrame, *, model_name: str) -> str:
         [[str(v) for v in row] for row in display.itertuples(index=False)],
     )
     return f"{header}\n\n{table}\n\n{_verdict_line(results)}\n"
+
+
+def frame_to_markdown(frame: pd.DataFrame, *, places: int = 4) -> str:
+    """Any frame as a markdown table, floats rounded and everything else left alone.
+
+    For results whose columns this module cannot know in advance — the leakage arms and
+    the tuning search. `to_markdown` above is the opinionated version, and it stays
+    opinionated: a backtest's dates and its WMAPE want different formatting, and a
+    renderer that guesses would get one of them wrong.
+    """
+    if frame.empty:
+        return "_(no rows)_"
+
+    display = frame.copy()
+    for column in display.columns:
+        if pd.api.types.is_float_dtype(display[column]):
+            display[column] = display[column].map(lambda v, p=places: f"{v:.{p}f}")
+
+    return _markdown_table(
+        [str(c) for c in display.columns],
+        [[str(v) for v in row] for row in display.itertuples(index=False)],
+    )
 
 
 def _markdown_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
