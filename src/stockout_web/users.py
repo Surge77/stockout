@@ -104,6 +104,44 @@ def create(
     return created
 
 
+def create_self_registered(
+    connection: sqlite3.Connection, *, email: str, password: str
+) -> User:
+    """Create an account through the public form, admin **only** if the table is empty.
+
+    The role is decided inside the `INSERT` rather than by reading the count first, and
+    that is the whole point of this function existing separately from `create`.
+
+        first = users.count(connection) == 0            # <- two requests both see 0
+        users.create(..., role="admin" if first else "user")
+
+    SQLite's default deferred transaction takes no lock on that `SELECT`, so two
+    registrations arriving together on an empty table can both read zero and both become
+    an admin. A privilege escalation reachable by anybody who can post a form twice at
+    once, on the one request in the system that hands out administrator.
+
+    One statement instead. SQLite evaluates the subquery inside the same implicit
+    transaction as the write, so the count and the insert cannot be separated.
+    """
+    address = normalise_email(email)
+    digest = hash_password(password)
+    try:
+        cursor = connection.execute(
+            "INSERT INTO users (email, password_hash, role, is_active, created_at) "
+            "VALUES (?, ?, "
+            "  CASE WHEN (SELECT COUNT(*) FROM users) = 0 THEN 'admin' ELSE 'user' END, "
+            "  1, ?)",
+            (address, digest, datetime.now(UTC).isoformat(timespec="seconds")),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise UserError(f"{address} already has an account") from exc
+
+    created = by_id(connection, int(cursor.lastrowid or 0))
+    if created is None:  # pragma: no cover - the row was just inserted
+        raise UserError("the account could not be read back after being created")
+    return created
+
+
 def authenticate(connection: sqlite3.Connection, *, email: str, password: str) -> User | None:
     """The account for these credentials, or None. Never says *which* half was wrong.
 
@@ -114,9 +152,13 @@ def authenticate(connection: sqlite3.Connection, *, email: str, password: str) -
         "SELECT * FROM users WHERE email = ?", (normalise_email(email),)
     ).fetchone()
 
-    supplied = password.encode("utf-8")[:MAX_PASSWORD_BYTES]
-    if row is None:
-        bcrypt.checkpw(supplied, _DUMMY_HASH)  # keep the timing indistinguishable
+    # Refused rather than clipped, so this matches what `hash_password` would have
+    # accepted. Clipping would let a 400-character string authenticate an account whose
+    # password is its first 72 bytes — harmless in practice, since knowing those *is*
+    # knowing the password, and still a rule that differs from the one at creation.
+    supplied = password.encode("utf-8")
+    if row is None or len(supplied) > MAX_PASSWORD_BYTES:
+        bcrypt.checkpw(b"no-such-user", _DUMMY_HASH)  # keep the timing indistinguishable
         return None
 
     if not bcrypt.checkpw(supplied, str(row["password_hash"]).encode("ascii")):

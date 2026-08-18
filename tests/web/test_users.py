@@ -244,3 +244,64 @@ def test_forecasting_with_no_model_loaded_says_so(unloaded_client: TestClient) -
     )
     assert response.status_code == 400
     assert "no model has been trained yet" in response.text
+
+
+# --- the bootstrap race ------------------------------------------------------------
+
+
+def test_simultaneous_first_registrations_produce_exactly_one_admin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two registrations racing on an empty table must not both become an admin.
+
+    The original code read `users.count(...) == 0` and then inserted. SQLite's default
+    deferred transaction takes no lock on that read, so both requests could see zero.
+    Reproduced here with real threads against one database file, because a single-threaded
+    assertion cannot show a race.
+    """
+    import threading
+
+    monkeypatch.setenv("STOCKOUT_WEB_DB", str(tmp_path / "users.db"))
+    db.initialise()
+
+    ready = threading.Barrier(8)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def enrol(index: int) -> None:
+        ready.wait()  # start every thread inside the same instant
+        try:
+            with db.session() as connection:
+                created = users.create_self_registered(
+                    connection, email=f"racer{index}@example.com", password="a-password"
+                )
+            with lock:
+                outcomes.append(created.role)
+        except Exception:  # a lock contention loss is fine; two admins is not
+            pass
+
+    threads = [threading.Thread(target=enrol, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    with db.session() as connection:
+        admins = [user for user in users.listing(connection) if user.is_admin]
+
+    assert len(admins) == 1, f"{len(admins)} admins were created by racing registrations"
+    assert outcomes.count("admin") <= 1
+
+
+def test_a_self_registered_account_is_a_plain_user_once_one_exists(connection) -> None:  # type: ignore[no-untyped-def]
+    users.create_self_registered(connection, email="first@example.com", password="a-password")
+    second = users.create_self_registered(
+        connection, email="second@example.com", password="a-password"
+    )
+    assert second.role == "user"
+
+
+def test_self_registering_a_duplicate_email_is_refused(connection) -> None:  # type: ignore[no-untyped-def]
+    users.create_self_registered(connection, email="dup@example.com", password="a-password")
+    with pytest.raises(users.UserError, match="already has an account"):
+        users.create_self_registered(connection, email="dup@example.com", password="a-password")
