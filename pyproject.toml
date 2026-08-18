@@ -51,7 +51,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # seaborn is notebook-only: it styles exploratory charts and nothing in src/ imports it.
-notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0", "seaborn==0.13.2"]
+notebook = ["jupyterlab==4.6.3", "ipykernel==7.3.0", "seaborn==0.13.2"]
 
 # The web app is an extra because the package's core is a library and a CLI: nothing in
 # `src/stockout/` imports FastAPI, and `pip install -e .` should not pull a web server for
