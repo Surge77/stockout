@@ -1,4 +1,13 @@
-"""`stockout fetch | synth | describe | backtest | calibration | frontier`.
+"""The argument surface: ten subcommands, grouped by what they are for.
+
+This module is the argument surface and nothing else — what each subcommand accepts,
+what it defaults to, and which handler in `commands.py` receives it. Keeping the two
+apart means a new flag is read next to the other flags rather than halfway down the
+function that consumes it.
+
+`fetch`, `synth` and `describe` are about the data file. `prepare`, `backtest`,
+`compare`, `leakage` and `tune` are about choosing a model. `train` and `predict` are
+about serving the one that was chosen.
 
 Handlers return an exit code and never raise past `main`; a domain error becomes a
 one-line `error: ...` on stderr, because a traceback is not a user interface.
@@ -11,23 +20,35 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-import pandas as pd
-
 from . import config
-from .data import schemas as s
-from .data.loaders import read_sales, write_sales
-from .data.synth import make_sales
-from .data.validate import calendar_gaps, null_profile, validate_sales
-from .errors import BacktestError, StockoutError
-from .evaluate.backtest import backtest
-from .evaluate.metrics import coverage_table
-from .evaluate.report import calibration_to_markdown, frontier_to_markdown, to_markdown
-from .inventory.policy import critical_ratio
-from .inventory.simulate import frontier
-from .models import FORECASTER_NAMES, forecaster
-from .models.conformal import ConformalQuantileForecaster, QuantileModel
-from .models.gbm import GbmQuantileForecaster
-from .split.rolling import Fold, rolling_origin, split_frame
+from .commands import (
+    run_backtest,
+    run_compare,
+    run_describe,
+    run_fetch,
+    run_leakage,
+    run_predict,
+    run_prepare,
+    run_synth,
+    run_train,
+    run_tune,
+)
+from .errors import StockoutError
+from .models import FORECASTER_NAMES
+from .models.registry import model_names
+from .persistence import artifact_path
+from .train import DEFAULT_CLASSIFIER, DEFAULT_REGRESSOR
+
+#: The default held-out window for `compare`, `leakage` and `train`. Four weeks: long
+#: enough to span every weekday four times, short enough to leave the training window
+#: nearly whole on a two-year file.
+DEFAULT_TEST_DAYS = 28
+
+#: Fewer folds than the backtest uses, matching `models/tuning.py`. A search costs
+#: candidates x folds fits, and the honest number comes from the holdout afterwards.
+DEFAULT_SEARCH_FOLDS = 3
+
+_TASKS = ("regression", "classification")
 
 
 def _force_utf8_output() -> None:
@@ -40,13 +61,43 @@ def _force_utf8_output() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def _add_frame_args(parser: argparse.ArgumentParser) -> None:
+    """The three arguments every model-fitting command needs to build its frame.
+
+    `--stores` is separate from `--data` because the real data is two files and the join
+    is where four of the features come from. `dataset.prepare` refuses to proceed without
+    it rather than quietly producing a frame missing its categorical branch.
+    """
+    parser.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
+    parser.add_argument("--stores", type=Path, default=config.SAMPLE_STORES_PATH)
+    parser.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
+
+
+def _add_holdout_args(parser: argparse.ArgumentParser) -> None:
+    """A held-out window, and the gap that stops it scoring a one-day forecast."""
+    parser.add_argument("--test-days", type=int, default=DEFAULT_TEST_DAYS)
+    parser.add_argument(
+        "--gap-days",
+        type=int,
+        default=None,
+        help="days between the training and test windows (default: the horizon)",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m stockout",
-        description="Retail demand forecasting scored by the replenishment decision it drives.",
+        description="Retail demand forecasting, and the scikit-learn comparison behind it.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    _add_data_commands(sub)
+    _add_model_commands(sub)
+    _add_serving_commands(sub)
+    return parser
+
+
+def _add_data_commands(sub: argparse._SubParsersAction) -> None:
     p_fetch = sub.add_parser("fetch", help="download the Rossmann archive from Kaggle")
     p_fetch.add_argument("--force", action="store_true", help="re-download even if present")
 
@@ -59,238 +110,68 @@ def _parser() -> argparse.ArgumentParser:
     p_describe = sub.add_parser("describe", help="row counts, null profile, calendar gaps")
     p_describe.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
 
+    p_prepare = sub.add_parser("prepare", help="build the model-ready frame and cache it")
+    _add_frame_args(p_prepare)
+    p_prepare.add_argument("--out", type=Path, default=config.PREPARED_CACHE)
+
+
+def _add_model_commands(sub: argparse._SubParsersAction) -> None:
     p_backtest = sub.add_parser("backtest", help="rolling-origin backtest of one model")
-    p_backtest.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
+    _add_frame_args(p_backtest)
     p_backtest.add_argument("--model", default="seasonal_naive", choices=FORECASTER_NAMES)
     p_backtest.add_argument("--folds", type=int, default=config.DEFAULT_N_FOLDS)
-    p_backtest.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
     p_backtest.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
-    p_backtest.add_argument(
-        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
-    )
+    p_backtest.add_argument("--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS)
     p_backtest.add_argument(
         "--sliding",
         action="store_true",
         help="fixed-width training window instead of an expanding one",
     )
 
-    p_frontier = sub.add_parser(
-        "frontier", help="price each service level by the stock and lost sales it implies"
-    )
-    p_frontier.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
-    p_frontier.add_argument(
-        "--store", type=int, default=None, help="defaults to the first store in the file"
-    )
-    p_frontier.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
-    p_frontier.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
-    p_frontier.add_argument(
-        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
-    )
-    p_frontier.add_argument(
-        "--review-period",
-        type=int,
-        default=config.DEFAULT_REVIEW_PERIOD_DAYS,
-        help="cycle length for the service-level column; does not change what is ordered",
-    )
-    p_frontier.add_argument(
-        "--lead-time",
-        type=int,
-        default=0,
-        help="days between placing an order and its arrival; 0 prices a repeated "
-        "newsvendor, above 0 opens a delivery pipeline and sizes across the "
-        "protection interval",
-    )
-    p_frontier.add_argument(
-        "--model",
-        default=GbmQuantileForecaster.name,
-        choices=(GbmQuantileForecaster.name, ConformalQuantileForecaster.name),
+    p_compare = sub.add_parser("compare", help="every registered model on one holdout")
+    _add_frame_args(p_compare)
+    _add_holdout_args(p_compare)
+    p_compare.add_argument("--task", default="regression", choices=_TASKS)
+    p_compare.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help="a subset to score (default: the whole registry, simplest first)",
     )
 
-    p_calibration = sub.add_parser(
-        "calibration", help="does each quantile cover the share of days it claims to"
+    p_leakage = sub.add_parser("leakage", help="what four validation protocols believe")
+    _add_frame_args(p_leakage)
+    _add_holdout_args(p_leakage)
+
+    p_tune = sub.add_parser("tune", help="grid search one or more models over time folds")
+    _add_frame_args(p_tune)
+    p_tune.add_argument("--task", default="regression", choices=_TASKS)
+    p_tune.add_argument("--models", nargs="+", required=True)
+    p_tune.add_argument("--folds", type=int, default=DEFAULT_SEARCH_FOLDS)
+
+
+def _add_serving_commands(sub: argparse._SubParsersAction) -> None:
+    p_train = sub.add_parser("train", help="fit both tasks on everything and save one file")
+    _add_frame_args(p_train)
+    _add_holdout_args(p_train)
+    p_train.add_argument(
+        "--regressor", default=DEFAULT_REGRESSOR, choices=model_names("regression")
     )
-    p_calibration.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
-    p_calibration.add_argument("--horizon", type=int, default=config.DEFAULT_HORIZON_DAYS)
-    p_calibration.add_argument("--gap", type=int, default=config.DEFAULT_GAP_DAYS)
-    p_calibration.add_argument(
-        "--min-train-days", type=int, default=config.DEFAULT_MIN_TRAIN_DAYS
+    p_train.add_argument(
+        "--classifier", default=DEFAULT_CLASSIFIER, choices=model_names("classification")
     )
-    return parser
+    p_train.add_argument("--out", type=Path, default=None)
 
-
-def _fetch(args: argparse.Namespace) -> int:
-    from .data.download import fetch
-
-    target = fetch(force=args.force)
-    print(f"archive ready in {target}")
-    return 0
-
-
-def _synth(args: argparse.Namespace) -> int:
-    frame = make_sales(n_stores=args.stores, days=args.days, seed=args.seed)
-    validate_sales(frame)
-    path = write_sales(frame, args.out)
-    print(f"wrote {len(frame):,} rows across {args.stores} stores to {path}")
-    return 0
-
-
-def _describe(args: argparse.Namespace) -> int:
-    frame = read_sales(args.data)
-    validate_sales(frame)
-
-    trading = frame[frame[s.OPEN] == 1]
-    print(f"rows          {len(frame):,}")
-    print(f"stores        {frame[s.STORE].nunique():,}")
-    print(f"dates         {frame[s.DATE].min().date()} to {frame[s.DATE].max().date()}")
-    print(f"trading days  {len(trading):,} ({len(trading) / max(len(frame), 1):.1%} of rows)")
-    print(f"mean sales    {trading[s.SALES].mean():,.0f} (trading days only)")
-
-    print("\nnulls")
-    print(null_profile(frame).to_string(index=False))
-
-    gaps = calendar_gaps(frame)
-    print(f"\ncalendar gaps: {len(gaps)} store(s) with missing days")
-    if not gaps.empty:
-        print(gaps.to_string(index=False))
-    return 0
-
-
-def _backtest(args: argparse.Namespace) -> int:
-    frame = read_sales(args.data)
-    validate_sales(frame)
-
-    results = backtest(
-        frame,
-        forecaster(args.model, horizon=args.horizon),
-        n_folds=args.folds,
-        horizon=args.horizon,
-        gap=args.gap,
-        min_train_days=args.min_train_days,
-        expanding=not args.sliding,
-    )
-    print(to_markdown(results, model_name=args.model))
-    return 0
-
-
-def _newest_fold(args: argparse.Namespace) -> tuple[Fold, pd.DataFrame, pd.DataFrame]:
-    """Read, validate, and lay out the single most recent rolling-origin fold."""
-    frame = read_sales(args.data)
-    validate_sales(frame)
-
-    fold = rolling_origin(
-        frame[s.DATE],
-        n_folds=1,
-        horizon=args.horizon,
-        gap=args.gap,
-        min_train_days=args.min_train_days,
-    )[-1]
-    train, test = split_frame(frame, fold)
-    return fold, train, test
-
-
-def _quantile_model(name: str, *, horizon: int) -> QuantileModel:
-    if name == ConformalQuantileForecaster.name:
-        return ConformalQuantileForecaster(horizon=horizon)
-    return GbmQuantileForecaster(horizon=horizon)
-
-
-def _frontier(args: argparse.Namespace) -> int:
-    """Fit quantiles on the newest fold, then price what stocking to each would cost.
-
-    One store, because inventory is held per store and averaging a fill rate across a
-    quiet shop and a busy one describes neither of them.
-    """
-    # Checked before anything is fitted. `simulate` would reject them too, but only after
-    # LightGBM has spent several seconds training a model nobody can use, and a ValueError
-    # escaping `main` is a traceback rather than a message.
-    if args.review_period < 1:
-        raise BacktestError("--review-period must be at least 1 day")
-    if args.lead_time < 0:
-        raise BacktestError("--lead-time cannot be negative")
-
-    fold, train, test = _newest_fold(args)
-
-    store = int(test[s.STORE].iloc[0]) if args.store is None else args.store
-    rows = test[s.STORE] == store
-    if not bool(rows.any()):
-        raise BacktestError(f"store {store} has no rows in the test window")
-
-    model = _quantile_model(args.model, horizon=args.horizon).fit(train)
-    quantiles = model.predict_quantiles(test)
-
-    underage, overage = config.underage_cost(), config.overage_cost()
-    table = frontier(
-        test.loc[rows, s.SALES],
-        quantiles.loc[rows],
-        lead_time_days=args.lead_time,
-        review_period_days=args.review_period,
-        holding_cost=overage,
-        shortage_cost=underage,
-    )
-
-    system = (
-        "single-period stocking"
-        if args.lead_time == 0
-        else f"{args.lead_time}d lead time, sized across a {args.lead_time + 1}d "
-        "protection interval"
-    )
-    target = critical_ratio(underage_cost=underage, overage_cost=overage)
-    print(
-        f"store {store} · {fold.test_start.date()} to {fold.test_end.date()} · "
-        f"horizon {args.horizon}d · {args.model} · {system}, {args.review_period}d cycles"
-    )
-    print(
-        f"newsvendor target quantile {target:.2f} "
-        f"(Cu {underage:.1f} short, Co {overage:.1f} carried) — derived, not tuned"
-    )
-    print(f"quantile crossing on {model.crossing_rate:.1%} of rows, sorted before use\n")
-    print(frontier_to_markdown(table))
-    return 0
-
-
-def _calibration(args: argparse.Namespace) -> int:
-    """Score the raw and the calibrated quantiles on the same held-out window.
-
-    Both tables, always. Printing only the calibrated one would turn a measurement into
-    an advertisement, and the size of the correction is the interesting number.
-    """
-    fold, train, test = _newest_fold(args)
-    trading = test[s.OPEN] == 1
-    actual = test.loc[trading, s.SALES]
-
-    # Checked before either model is fitted. A window of nothing but closures scores every
-    # level NaN, and a coverage table of NaN reads as a result rather than as an absence.
-    if not bool(trading.any()):
-        raise BacktestError(
-            f"the test window {fold.test_start.date()} to {fold.test_end.date()} contains "
-            "no trading day, so no coverage can be measured"
-        )
-
-    raw = GbmQuantileForecaster(horizon=args.horizon).fit(train)
-    calibrated = ConformalQuantileForecaster(horizon=args.horizon).fit(train)
-
-    print(
-        f"{fold.test_start.date()} to {fold.test_end.date()} · horizon {args.horizon}d · "
-        f"{int(trading.sum()):,} trading rows held out · "
-        f"{calibrated.calibration_rows:,} rows in the calibration window\n"
-    )
-    for model in (raw, calibrated):
-        predicted = model.predict_quantiles(test).loc[trading]
-        print(
-            calibration_to_markdown(
-                coverage_table(actual, predicted), model_name=model.name
-            )
-        )
-
-    if calibrated.saturated_quantiles:
-        levels = ", ".join(f"{level:.2f}" for level in calibrated.saturated_quantiles)
-        print(
-            f"> Quantiles {levels} saturate: the calibration window holds too few rows "
-            f"for the finite-sample correction to land anywhere but on the largest "
-            f"residual in it. Their offsets are the worst day that happened, not an "
-            f"estimate of a quantile."
-        )
-    return 0
+    p_predict = sub.add_parser("predict", help="forecast one store-day from a saved model")
+    p_predict.add_argument("--data", type=Path, default=config.SAMPLE_PATH)
+    p_predict.add_argument("--stores", type=Path, default=config.SAMPLE_STORES_PATH)
+    p_predict.add_argument("--model-path", type=Path, default=artifact_path())
+    p_predict.add_argument("--store", type=int, required=True)
+    p_predict.add_argument("--date", required=True, help="the day to forecast, YYYY-MM-DD")
+    p_predict.add_argument("--promo", type=int, default=0, choices=(0, 1))
+    p_predict.add_argument("--school-holiday", type=int, default=0, choices=(0, 1))
+    p_predict.add_argument("--state-holiday", default="0")
+    p_predict.add_argument("--closed", action="store_true", help="the store is shut that day")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -299,12 +180,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = _parser().parse_args(argv)
     handlers = {
-        "fetch": _fetch,
-        "synth": _synth,
-        "describe": _describe,
-        "backtest": _backtest,
-        "frontier": _frontier,
-        "calibration": _calibration,
+        "fetch": run_fetch,
+        "synth": run_synth,
+        "describe": run_describe,
+        "prepare": run_prepare,
+        "backtest": run_backtest,
+        "compare": run_compare,
+        "leakage": run_leakage,
+        "tune": run_tune,
+        "train": run_train,
+        "predict": run_predict,
     }
     try:
         return handlers[args.command](args)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from ..errors import SchemaError
 from . import schemas as s
 
 
@@ -49,6 +50,58 @@ def canonicalise(frame: pd.DataFrame) -> pd.DataFrame:
     if sort_keys:
         out = out.sort_values(sort_keys).reset_index(drop=True)
     return out
+
+
+def read_store(path: str | Path) -> pd.DataFrame:
+    """Read `store.csv` — one row per store — into the canonical schema.
+
+    Kept separate from `read_sales` rather than folded into it because the two files
+    have different shapes and different keys: this one is 1115 rows deep and has no
+    date at all. Sharing a reader would mean a function whose behaviour depends on
+    guessing which file it was handed.
+    """
+    frame = pd.read_csv(Path(path), low_memory=False)
+    return canonicalise_store(frame)
+
+
+def canonicalise_store(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rename and coerce a store-metadata frame. Pure; does not mutate input.
+
+    Missing values are left missing. `competition_distance` is absent for three
+    stores and the `promo2_*` columns are absent for every store not running the
+    continuing promotion — that absence is information, and imputing it here would
+    hide the decision inside a reader. `features/preprocess.py` makes it explicitly.
+    """
+    out = frame.rename(columns=s.ROSSMANN_STORE_RENAME).copy()
+
+    for column, dtype in s.STORE_DTYPES.items():
+        if column in out.columns:
+            out[column] = out[column].astype(pd.api.types.pandas_dtype(dtype))
+
+    if s.STORE in out.columns:
+        out = out.sort_values(s.STORE).reset_index(drop=True)
+    return out
+
+
+def merge_store(sales: pd.DataFrame, store: pd.DataFrame) -> pd.DataFrame:
+    """Left-join store metadata onto the daily sales frame.
+
+    A left join, not an inner one: a sales row whose store is missing from the
+    metadata file is a data problem worth seeing as nulls downstream, not a row to
+    delete quietly. `validate.py` is where it gets to complain.
+
+    `promo_interval` is filled with the empty string rather than left as NA because
+    it feeds a TfidfVectorizer, which cannot vectorise a null. An empty string is the
+    honest encoding: this store runs no continuing promotion, so it has no months.
+    """
+    if s.STORE not in store.columns:
+        raise SchemaError(f"store metadata is missing its {s.STORE!r} column")
+
+    merged = sales.merge(store, on=s.STORE, how="left", validate="many_to_one")
+
+    if s.PROMO_INTERVAL in merged.columns:
+        merged[s.PROMO_INTERVAL] = merged[s.PROMO_INTERVAL].fillna("").astype("string")
+    return merged
 
 
 def write_sales(frame: pd.DataFrame, path: str | Path) -> Path:

@@ -6,6 +6,14 @@ whatever the charts happened to show. Answers live in [results.md](results.md).
 Each question names what would count as a **no**. A hypothesis that cannot lose is not a
 hypothesis, it is a plan to describe whatever happens.
 
+> **Q5 was replaced on 2026-08-18 and does not have that property.** The original asked
+> whether stocking to the newsvendor quantile beat stocking to the mean, and the inventory
+> simulator that would have answered it was deleted by
+> [ADR 0014](decisions/0014-a-scikit-learn-comparison-not-an-inventory-system.md). Its
+> replacement was written by somebody who had already seen the comparison table, which is
+> exactly the thing the rest of this file exists to prevent. Q1 to Q4 are unchanged and
+> predate every chart. Read Q5's verdict with that discount applied.
+
 ---
 
 ## Q1 — Does forecast accuracy decay with horizon, and how fast?
@@ -52,17 +60,24 @@ baseline for the same store and weekday.
   overstocks the following week — a forecasting error that only shows up in the
   inventory simulation, never in WMAPE.
 
-## Q5 — Does stocking to the newsvendor quantile beat stocking to the mean?
+## Q5 — Does the classifier add anything over binning the regressor?
 
-Run the inventory simulation with the point forecast plus a normal safety stock, and with
-the direct quantile forecast, at matched holding cost.
+Fit the same estimator twice on the same rows: once to predict `sales`, once to predict
+the Low/Medium/High class. Bin the regression's output against the same per-store cut
+points the classifier was trained on, and score both against the truth.
 
-- **Expected:** the quantile policy achieves a higher fill rate at the same cost, because
-  demand errors are not symmetric.
-- **Counts as a no:** the two policies land on the same frontier, meaning the normal
-  approximation was good enough and the quantile models were not worth building.
-- **Why it matters:** this is the question the repository is named after. A **no** here is
-  the most interesting outcome available and must be reported as loudly as a yes.
+- **Expected:** the dedicated classifier wins, because it optimises the boundary it is
+  scored on rather than a squared error that treats every currency unit alike.
+- **Counts as a no:** binning the regression scores at or above the classifier on macro-F1,
+  which would mean half the registry answers a question the other half already answered.
+- **Why it matters:** it decides whether the classification half of this package is a
+  product or a demonstration. `predict._label` already leans on the answer — when the
+  classifier abstains on a closed day, the served label falls back to binning the number.
+  If binning is as good everywhere, that fallback is the whole product.
+
+*(Replacing the original Q5, which needed the deleted inventory simulator. See the note at
+the top of this file: unlike Q1–Q4, this one was written after the comparison table
+existed.)*
 
 ---
 

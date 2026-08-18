@@ -22,7 +22,7 @@ from .lags import add_lags, add_rolling, seasonal_lags
 #: Never a feature: the target itself, the date it is indexed by, the raw categorical
 #: string replaced by `is_state_holiday`, and anything unknown at the forecast origin.
 FEATURE_DENYLIST: frozenset[str] = frozenset(
-    {s.SALES, s.DATE, s.STATE_HOLIDAY} | set(s.UNAVAILABLE_AT_FORECAST_TIME)
+    {s.DATE, s.STATE_HOLIDAY} | set(s.TARGET_COLUMNS) | set(s.UNAVAILABLE_AT_FORECAST_TIME)
 )
 
 DEFAULT_ROLLING_WINDOWS: tuple[int, ...] = (7, 28, 91)
@@ -48,16 +48,25 @@ def build_features(
 
 
 def feature_columns(frame: pd.DataFrame) -> list[str]:
-    """Every numeric column a model is allowed to train on, in a stable order.
+    """Every column a model is allowed to train on, in a stable order.
 
-    Non-numeric columns are dropped rather than encoded here; anything categorical
-    that matters should arrive as an explicit derived flag, so that the encoding is
-    visible in the diff instead of implied by dtype.
+    Numeric columns qualify on dtype. Non-numeric ones qualify only by being named in
+    the schema as categorical or as the text column — `features/preprocess.py` has a
+    branch for each, and a column with no branch has no encoding, so admitting it would
+    hand an estimator a string it cannot use.
+
+    This used to return numeric columns alone and drop the rest in silence. That was
+    right when every model was a tree fed hand-made flags, and became wrong the moment a
+    `ColumnTransformer` existed to encode them: `store_type` and `promo_interval` would
+    have been dropped without a word, and the one-hot and Tf-idf branches would have sat
+    there with nothing to do.
     """
+    encodable = {*s.CATEGORICAL_FEATURES, s.TEXT_FEATURE}
     return [
         column
         for column in frame.columns
-        if column not in FEATURE_DENYLIST and pd.api.types.is_numeric_dtype(frame[column])
+        if column not in FEATURE_DENYLIST
+        and (pd.api.types.is_numeric_dtype(frame[column]) or column in encodable)
     ]
 
 

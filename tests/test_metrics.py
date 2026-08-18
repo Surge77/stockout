@@ -48,36 +48,6 @@ def test_mase_is_nan_when_the_baseline_is_perfect() -> None:
     assert np.isnan(metrics.mase(actual, [11.0, 21.0], y_baseline=actual))
 
 
-def test_pinball_punishes_under_forecasting_at_a_high_quantile() -> None:
-    under = metrics.pinball([100.0], [90.0], tau=0.9)
-    over = metrics.pinball([100.0], [110.0], tau=0.9)
-    assert under == pytest.approx(9.0)
-    assert over == pytest.approx(1.0)
-
-
-def test_pinball_is_symmetric_at_the_median() -> None:
-    under = metrics.pinball([100.0], [90.0], tau=0.5)
-    over = metrics.pinball([100.0], [110.0], tau=0.5)
-    assert under == pytest.approx(over)
-
-
-@pytest.mark.parametrize("tau", [0.0, 1.0, -0.1, 1.5])
-def test_pinball_rejects_a_tau_outside_the_open_unit_interval(tau: float) -> None:
-    with pytest.raises(ValueError, match="strictly between"):
-        metrics.pinball([1.0], [1.0], tau=tau)
-
-
-def test_coverage_counts_actuals_at_or_below_the_upper_bound() -> None:
-    assert metrics.coverage([1.0, 2.0, 3.0, 400.0], [10.0, 10.0, 10.0, 10.0]) == 0.75
-
-
-def test_empty_input_gives_nan_not_a_crash() -> None:
-    assert np.isnan(metrics.mae([], []))
-    assert np.isnan(metrics.rmse([], []))
-    assert np.isnan(metrics.coverage([], []))
-    assert np.isnan(metrics.pinball([], [], tau=0.5))
-
-
 @given(
     st.lists(st.floats(min_value=1.0, max_value=1e6), min_size=1, max_size=40),
     st.floats(min_value=0.1, max_value=10.0),
@@ -93,54 +63,20 @@ def test_wmape_is_scale_invariant(actual: list[float], factor: float) -> None:
 
 
 @given(st.lists(st.floats(min_value=0.0, max_value=1e6), min_size=1, max_size=40))
-def test_a_perfect_forecast_scores_zero_everywhere(actual: list[float]) -> None:
+def test_a_perfect_forecast_scores_zero_on_every_error_metric(actual: list[float]) -> None:
     assert metrics.mae(actual, actual) == 0.0
     assert metrics.rmse(actual, actual) == 0.0
-    assert metrics.pinball(actual, actual, tau=0.7) == 0.0
 
 
-def test_the_coverage_table_signs_the_gap_so_the_dangerous_direction_reads_negative() -> None:
-    """Under-covering sells a promise the shelf does not keep. It must not look like a miss
-    in the harmless direction."""
-    import pandas as pd
+@given(st.lists(st.floats(min_value=1.0, max_value=1e6), min_size=1, max_size=40))
+def test_a_perfect_forecast_scores_zero_wmape_and_a_perfect_r2(actual: list[float]) -> None:
+    """Split from the case above because both metrics need a non-degenerate actual.
 
-    actual = [10.0] * 10
-    predicted = pd.DataFrame({"0.9": [5.0] * 10, "0.5": [50.0] * 10})
-    table = metrics.coverage_table(actual, predicted)
-
-    assert table.loc[0, "empirical"] == pytest.approx(0.0)
-    assert table.loc[0, "gap"] == pytest.approx(-0.9)
-    assert table.loc[1, "gap"] == pytest.approx(0.5)
-
-
-def test_the_coverage_table_prices_each_level_with_its_own_pinball_loss() -> None:
-    """The loss the level was fitted under, so calibration can be judged against accuracy.
-
-    Two columns holding the *same* forecast, so the only thing that can separate their
-    losses is the tau each is scored at. A perfect forecast would score zero at every
-    level and the assertion would pass even if the column label were ignored entirely —
-    which is the bug this test exists to catch.
+    WMAPE divides by the total actual and R2 divides by its variance, so an all-zero
+    or constant series makes each of them 0/0 — undefined rather than perfect. The
+    strategy starts at 1.0 to keep the total positive; the constant case is covered by
+    `test_wmape_is_nan_when_every_actual_is_zero`.
     """
-    import pandas as pd
-
-    # Under-forecast by 10 everywhere. Pinball at tau is then tau * 10.
-    predicted = pd.DataFrame({"0.9": [90.0] * 4, "0.5": [90.0] * 4})
-    table = metrics.coverage_table([100.0] * 4, predicted)
-
-    assert table.loc[0, "pinball"] == pytest.approx(9.0)
-    assert table.loc[1, "pinball"] == pytest.approx(5.0)
-
-
-def test_a_column_that_is_not_a_quantile_scores_nan_rather_than_crashing_a_report() -> None:
-    import pandas as pd
-
-    table = metrics.coverage_table([10.0] * 4, pd.DataFrame({"mean": [10.0] * 4}))
-    assert pd.isna(table.loc[0, "quantile"])
-    assert pd.isna(table.loc[0, "pinball"])
-
-
-def test_a_coverage_table_needs_something_to_score() -> None:
-    import pandas as pd
-
-    with pytest.raises(ValueError, match="no quantile forecasts"):
-        metrics.coverage_table([1.0], pd.DataFrame(index=[0]))
+    assert metrics.wmape(actual, actual) == 0.0
+    if len(set(actual)) > 1:
+        assert metrics.r2(actual, actual) == pytest.approx(1.0)

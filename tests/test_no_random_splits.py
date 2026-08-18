@@ -1,13 +1,23 @@
-"""The package must contain no randomised splitting, and this proves it structurally.
+"""Randomness is allowed in this package, but only where it is the point.
 
-An earlier version of this check was a `grep` in CI. It failed immediately — on the
-docstrings that explain *why* there is no shuffled splitter, and on `__pycache__` files.
-A text search cannot tell code from prose about code, which makes it both noisy and,
-worse, defeatable by anyone who deletes the explanation.
+The previous version of this file banned scikit-learn outright: no `train_test_split`,
+no `random_state`, no import. That made the leakage problem impossible to demonstrate,
+which is a strange way to teach it — the project could assert that a shuffled split was
+wrong and could never show it.
 
-Parsing the AST looks only at what executes. Docstrings and comments are string and
-comment nodes and are never visited; `.pyc` files are never opened. So the assertion is
-exactly "no shuffling happens here", not "nobody mentions shuffling".
+So the guard was not deleted, it was **scoped**. Three rules, each checked by parsing the
+AST rather than grepping the text, because a text search cannot tell code from the
+docstrings explaining the code and would therefore be defeated by deleting the
+explanation.
+
+1. **Shuffled splitters live in exactly one module.** `split/strategies.py` exists to run
+   `train_test_split` against a time-ordered split and measure the difference. Anywhere
+   else, a shuffled splitter is the bug ADR 0003 is about.
+2. **`np.random` lives in the generator.** `data/synth.py` takes an explicit seed and
+   produces a byte-identical frame from it. Nothing else should be inventing numbers.
+3. **A seed, once used, is never `None`.** Reproducibility is not the same thing as
+   having no randomness. `random_state=None` means two runs of the same command produce
+   two different tables, and the second one silently wins.
 """
 
 from __future__ import annotations
@@ -17,82 +27,88 @@ from pathlib import Path
 
 import pytest
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "stockout"
+SRC = Path(__file__).resolve().parent.parent / "src" / "stockout"
 
-#: Names that would mean a random split had crept in. `random_state` is included even
-#: though it is often harmless elsewhere: nothing in this package should have a seeded
-#: source of randomness except the synthetic generator, which takes an explicit `seed`.
-BANNED_NAMES = frozenset(
+#: Splitters that shuffle. Every one of them is legitimate in the module whose job is to
+#: demonstrate what shuffling costs, and nowhere else.
+SHUFFLING_SPLITTERS = frozenset(
     {
         "train_test_split",
         "ShuffleSplit",
         "StratifiedShuffleSplit",
         "KFold",
         "StratifiedKFold",
-        "shuffle",
-        "random_state",
     }
 )
 
-BANNED_MODULES = frozenset({"sklearn"})
+#: The one module allowed to name them, relative to `src/stockout`.
+SPLITTER_EXEMPTION = Path("split") / "strategies.py"
+
+#: The only modules allowed to draw random numbers directly. Both are generators, both
+#: take an explicit seed, and both promise a byte-identical frame from it. The list is
+#: written out rather than matched by a `synth*` glob so that adding a third one is a
+#: decision somebody makes, not a filename that happens to slip past.
+RANDOMNESS_EXEMPTIONS = frozenset({"synth.py", "synth_stores.py"})
 
 
 def _python_files() -> list[Path]:
-    return sorted(SRC.rglob("*.py"))
+    return sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
+
+
+def _tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"))
 
 
 def test_there_are_source_files_to_check() -> None:
-    """Guards the guard: an empty file list would make everything below pass vacuously."""
+    """A guard that runs over nothing passes over nothing."""
     assert len(_python_files()) >= 15
 
 
 @pytest.mark.parametrize("path", _python_files(), ids=lambda p: p.name)
-def test_no_module_performs_a_randomised_split(path: Path) -> None:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    offences: list[str] = []
+def test_shuffled_splitters_appear_only_where_they_are_the_subject(path: Path) -> None:
+    if path.relative_to(SRC) == SPLITTER_EXEMPTION:
+        pytest.skip("split/strategies.py exists to demonstrate exactly this")
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id in BANNED_NAMES:
-            offences.append(f"name {node.id!r} at line {node.lineno}")
-        elif isinstance(node, ast.Attribute) and node.attr in BANNED_NAMES:
-            offences.append(f"attribute {node.attr!r} at line {node.lineno}")
-        elif isinstance(node, ast.keyword) and node.arg in BANNED_NAMES:
-            offences.append(f"keyword argument {node.arg!r} at line {node.lineno}")
-
-    assert not offences, f"{path.name} performs a randomised split: {'; '.join(offences)}"
+    offences = [
+        node.id if isinstance(node, ast.Name) else node.attr
+        for node in ast.walk(_tree(path))
+        if (isinstance(node, ast.Name) and node.id in SHUFFLING_SPLITTERS)
+        or (isinstance(node, ast.Attribute) and node.attr in SHUFFLING_SPLITTERS)
+    ]
+    assert not offences, (
+        f"{path.name} names a shuffled splitter {sorted(set(offences))}. "
+        f"Those belong in {SPLITTER_EXEMPTION.as_posix()}, which measures what they cost."
+    )
 
 
 @pytest.mark.parametrize("path", _python_files(), ids=lambda p: p.name)
-def test_no_module_imports_scikit_learn(path: Path) -> None:
-    """sklearn is not a dependency, and its splitters are the specific hazard."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def test_a_seed_is_never_left_to_chance(path: Path) -> None:
+    """`random_state=None` is not reproducible, and an unreproducible table is a rumour."""
+    offences = [
+        node.lineno
+        for node in ast.walk(_tree(path))
+        if isinstance(node, ast.keyword)
+        and node.arg == "random_state"
+        and isinstance(node.value, ast.Constant)
+        and node.value.value is None
+    ]
+    assert not offences, f"{path.name}:{offences} passes random_state=None"
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            roots = {alias.name.split(".")[0] for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            roots = {(node.module or "").split(".")[0]}
-        else:
-            continue
-        assert not (roots & BANNED_MODULES), f"{path.name}:{node.lineno} imports scikit-learn"
 
-
-def test_the_only_module_using_randomness_is_the_generator() -> None:
-    """`np.random` may execute in exactly one module, and it takes an explicit seed.
-
-    Also parsed rather than searched, for the same reason as above: a docstring is
-    allowed to discuss randomness, and only a call site counts.
-    """
-    users = []
-    for path in _python_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Attribute)
-                and node.attr == "random"
-                and isinstance(node.value, ast.Name)
-                and node.value.id in {"np", "numpy", "random"}
-            ):
-                users.append(path.name)
-                break
-    assert users == ["synth.py"]
+def test_the_only_module_drawing_random_numbers_is_the_generator() -> None:
+    users = sorted(
+        {
+            path.name
+            for path in _python_files()
+            for node in ast.walk(_tree(path))
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in {"np", "numpy"}
+            and node.attr == "random"
+        }
+    )
+    offenders = set(users) - RANDOMNESS_EXEMPTIONS
+    assert not offenders, (
+        f"{sorted(offenders)} draw random numbers directly; "
+        f"only {sorted(RANDOMNESS_EXEMPTIONS)} may."
+    )

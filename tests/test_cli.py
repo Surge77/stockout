@@ -1,4 +1,10 @@
-"""The command line, exercised end to end against synthetic data and no network."""
+"""The command line, exercised end to end against synthetic data and no network.
+
+The commands that fit scikit-learn pipelines live in `test_cli_commands.py` — they carry
+most of the runtime. What is left here is the cheap surface: the parser, the two data
+commands, the baselines, and the errors that must arrive as a line rather than a
+traceback.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +13,7 @@ from pathlib import Path
 import pytest
 
 from stockout.cli import main
-from stockout.data.loaders import read_sales, write_sales
-from stockout.data.synth import make_sales
-
-
-@pytest.fixture
-def data_file(tmp_path: Path) -> Path:
-    return write_sales(make_sales(n_stores=2, days=730, seed=13), tmp_path / "sales.csv")
+from stockout.data.loaders import read_sales
 
 
 def test_synth_writes_a_valid_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -62,135 +62,6 @@ def test_an_unknown_model_is_rejected_by_the_parser(data_file: Path) -> None:
     assert excinfo.value.code == 2
 
 
-def test_backtest_runs_the_gradient_boosted_model_and_reports_beating_the_baseline(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The model is reachable from the command line, not only from a notebook."""
-    assert main(["backtest", "--data", str(data_file), "--model", "gbm", "--folds", "2"]) == 0
-    out = capsys.readouterr().out
-    assert "`gbm`" in out
-    assert "beats seasonal-naive" in out
-
-
-def test_frontier_prices_every_service_level_and_names_the_cheapest(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert main(["frontier", "--data", str(data_file)]) == 0
-    out = capsys.readouterr().out
-    assert "newsvendor target quantile 0.75" in out
-    assert "quantile crossing on" in out
-    assert "| quantile" in out
-    assert "Cheapest at quantile" in out
-
-
-def test_frontier_costs_more_stock_for_more_service(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The curve has to slope, or the table is decoration."""
-    assert main(["frontier", "--data", str(data_file)]) == 0
-    rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("| 0.")]
-    held = [float(row.split("|")[8].strip().replace(",", "")) for row in rows]
-    assert held == sorted(held)
-    assert held[0] < held[-1]
-
-
-def test_frontier_without_lightgbm_says_what_to_install(
-    data_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The bare install must reach the model and then explain itself, not fail at import."""
-    import sys
-
-    monkeypatch.setitem(sys.modules, "lightgbm", None)
-    assert main(["frontier", "--data", str(data_file)]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: LightGBM is not installed")
-    assert "[gbm]" in err
-
-
-def test_frontier_rejects_a_review_period_before_it_trains_anything(
-    data_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Rejecting it after the fit would waste seconds and arrive as a traceback.
-
-    LightGBM is removed to prove the order: if the check ran late, this would fail with
-    the missing-dependency message instead.
-    """
-    import sys
-
-    monkeypatch.setitem(sys.modules, "lightgbm", None)
-    assert main(["frontier", "--data", str(data_file), "--review-period", "0"]) == 1
-    assert "error: --review-period must be at least 1 day" in capsys.readouterr().err
-
-
-def test_frontier_rejects_a_store_that_is_not_in_the_window(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert main(["frontier", "--data", str(data_file), "--store", "999"]) == 1
-    assert "store 999 has no rows" in capsys.readouterr().err
-
-
-def test_frontier_names_the_system_it_priced_so_two_runs_cannot_be_confused(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A lead time changes what was simulated, so it has to change the header too."""
-    assert main(["frontier", "--data", str(data_file), "--lead-time", "7"]) == 0
-    out = capsys.readouterr().out
-    assert "7d lead time" in out
-    assert "8d protection interval" in out
-    assert "mean_on_order" in out
-
-
-def test_frontier_rejects_a_negative_lead_time_before_it_trains_anything(
-    data_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    import sys
-
-    monkeypatch.setitem(sys.modules, "lightgbm", None)
-    assert main(["frontier", "--data", str(data_file), "--lead-time", "-1"]) == 1
-    assert "error: --lead-time cannot be negative" in capsys.readouterr().err
-
-
-def test_frontier_can_price_the_calibrated_model(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The point of calibrating is that the decision layer gets to use it."""
-    argv = ["frontier", "--data", str(data_file), "--model", "gbm_conformal"]
-    assert main(argv) == 0
-    out = capsys.readouterr().out
-    assert "gbm_conformal" in out
-    assert "Cheapest at quantile" in out
-
-
-def test_calibration_scores_the_raw_and_the_calibrated_model_side_by_side(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Printing only the calibrated table would be an advertisement, not a measurement."""
-    assert main(["calibration", "--data", str(data_file)]) == 0
-    out = capsys.readouterr().out
-
-    assert "trading rows held out" in out
-    assert "`gbm_quantile` — coverage against the level it claims" in out
-    assert "`gbm_conformal` — coverage against the level it claims" in out
-    assert out.count("Worst miss at quantile") == 2
-
-
-def test_calibration_says_when_a_level_rests_on_a_single_observation(
-    data_file: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Two stores hold about seventy calibration rows, and 0.99 needs at least ninety-nine.
-
-    Below that the offset for the top level is the worst day that happened rather than an
-    estimate of anything, and the command has to say so. This fixture is deliberately the
-    small one: the warning is worth nothing if it only appears when it is not needed.
-    """
-    assert main(["calibration", "--data", str(data_file)]) == 0
-    out = capsys.readouterr().out
-
-    assert "rows in the calibration window" in out
-    assert "Quantiles 0.99 saturate" in out
-    assert "not an estimate of a quantile" in out
-
-
 def test_a_missing_data_file_is_a_one_line_error_not_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -201,7 +72,10 @@ def test_a_missing_data_file_is_a_one_line_error_not_a_traceback(
 def test_too_many_folds_is_a_one_line_error(
     data_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["backtest", "--data", str(data_file), "--folds", "40"]) == 1
+    # 730 days of fixture, 365 of which the minimum training window claims. At the
+    # seven-day default horizon that leaves room for 52 folds, so 60 is the ask that
+    # cannot be met.
+    assert main(["backtest", "--data", str(data_file), "--folds", "60"]) == 1
     assert "cannot support" in capsys.readouterr().err
 
 

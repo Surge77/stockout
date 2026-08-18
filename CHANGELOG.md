@@ -7,13 +7,174 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Planned
 
-- Answers to the five questions in `docs/questions.md`, which need the real Rossmann file
-  and nothing else — every cell that produces them now runs
-- Conditional coverage. ADR 0009 corrects on average, so a single store or a single
-  December can still be badly covered and the calibration will not notice
-- A calibration whose coverage statement is provable rather than measured. The two-fit
-  design trades the split-conformal theorem for correct lag alignment, and says so
-- A charge on stock in transit, which ADR 0010 currently gives away free
+- Answers to the five questions on **real** data. They are answered on the generator now,
+  and three of the five came out flat or negative for reasons that are properties of the
+  generator rather than of retail. This needs a Kaggle account and an accepted set of
+  competition rules rather than any code
+- Feeding the searched hyperparameters back into the registry. `tune` prints what it
+  found; `linear.py` still says `alpha=1.0`, so a reader has to run the search to learn
+  that the literal is not the searched answer. ADR 0017
+- A hierarchical or per-store model. Every scikit-learn model here is one global fit with
+  `store` as a feature, which pools incidentally and shares nothing deliberately — and Q2
+  cannot test whether that is the right call on four stores
+- Something to replace the decision layer ADR 0014 removed. Accuracy is not what a
+  replenishment decision is graded on, and nothing here now says what a forecast costs
+
+## [0.5.0] — 2026-08-18
+
+The scikit-learn curriculum, finished: the registry reaches the command line, the notebook
+runs again, and every document describes the package that ships. Three of the five
+committed questions lost, which is reported at the top of `docs/results.md` rather than
+somewhere further down.
+
+### Added
+
+- **Six subcommands, and one widened.** `compare` runs the whole registry against one
+  holdout and names a winner; `leakage` prints the four-arm decomposition with its optimism
+  column; `tune` grid searches over time-ordered folds; `prepare` builds and caches the
+  model frame; `train` fits both tasks on everything and writes one artifact; `predict`
+  reads it back and answers one store-day. `backtest --model` now accepts every registered
+  regressor as well as the three baselines. Twelve regressors and nine classifiers were
+  previously reachable only from a library import — and `persistence.py` told a failed load
+  to run `python -m stockout train`, which did not exist.
+- **Every model command routes through `dataset.prepare`**, which is what that module's
+  docstring already claimed. That needed `--stores`: the real data is two files, four
+  features come from the join, and `prepare` refuses to proceed without it rather than
+  silently producing a frame with no categorical branch.
+- **`--gap-days` defaults to the horizon**, not to zero. A holdout whose training rows end
+  the day before its test rows begin is scoring a one-day forecast however long the horizon
+  claims to be.
+- **ADRs 0014 to 0020.** Four of them (0015, 0017, 0018, 0019) were cited from `src/` and
+  `pyproject.toml` in eight places and had never been written. Each carries the measurement
+  its argument rests on rather than the argument alone.
+- **`tests/test_notebook.py`**, which execs every code cell into one namespace, checks each
+  question wrote its figure, and asserts the notebook's question headings match the
+  committed ones. No kernel: an `.ipynb` is JSON, and neither `nbclient` nor `ipykernel` is
+  installed.
+
+### Changed
+
+- **`notebooks/01_explore.ipynb` rebuilt.** It imported six modules deleted by the previous
+  release and raised on its first cell. Q5 no longer needs the inventory simulator — it now
+  asks whether the classifier beats binning the regression, which is the question
+  `predict._label` already leans on.
+- **`docs/questions.md` says plainly that Q5 was rewritten after the comparison table
+  existed**, and that Q1 to Q4 were not. A file whose whole point is that the questions
+  predate the charts has to disclose the one that does not.
+- **README, MODEL_CARD, architecture, glossary and results rewritten** against what runs,
+  with every number regenerated. The README's three headline commands all exited 2; the
+  glossary defined nine inventory terms the package no longer contains; the results file's
+  leakage table quoted numbers no invocation reproduces.
+- **CI's smoke job asserted two commands that no longer exist.** It ran `frontier` and
+  `calibration`, grepped their stderr for a LightGBM install hint, and could only fail.
+  Replaced with assertions about the current surface, including one that fails if a
+  registered model is not offered by `--model`.
+- **ADRs 0007 to 0013 keep their text and gain a supersession banner** naming 0014. A
+  decision log edited to match the present is not a log.
+
+### Fixed
+
+- **A fold in which nobody runs a continuing promotion crashed the vectoriser.**
+  `TfidfVectorizer` learned its vocabulary from the training documents, so a slice with no
+  month tokens raised `empty vocabulary; perhaps the documents only contain stop words`
+  four frames inside a `ColumnTransformer`. That is what fitting on a single store looks
+  like, which the notebook does in Q2. The vocabulary is now fixed to
+  `store_features.MONTH_TOKENS` — twelve months are a closed set known before any data is
+  read — and the branch emits the same columns in the same order every fold. Identical
+  output on the full sample.
+- **`SimpleImputer` silently dropped a column with no observed values**, warning from four
+  frames down. A store that has never run the promotion has `promo2_since_week` and
+  `promo2_since_year` entirely null, and two features vanished from its matrix.
+  `keep_empty_features=True` keeps them at zero instead.
+
+  Both are the same bug in two branches: a transformer whose output width depends on which
+  rows happened to land in the fold. Both were found by writing the notebook rather than by
+  a test, and both now have one.
+
+### Notes
+
+- **The model ladder is flat, and that is the headline.** Twelve regressors land within
+  0.01 WMAPE of each other; at four decimal places `linear` and the winner are the same
+  number, 0.0899 each; `bagging` spends 7.7 seconds to finish below both. On a generator
+  whose promotion calendar and weekday pattern are deterministic, a linear model on the
+  right features is the correct answer, and reporting otherwise would be inventing a result.
+- **Three of the five questions lost.** Accuracy does not decay with horizon here
+  (0.0849 → 0.0835 → 0.0875 across 7 to 42 days, which was the stated failure condition);
+  the fitted model beats the baseline on every store including the quiet ones; and the
+  promotion wake is a −1.8% dip against a +24.5% lift, which is a reversal on the letter
+  and barely on the substance. Q3 and Q5 held.
+- **Q4's first answer was wrong and the write-up keeps it.** The wake counter ran straight
+  through the following promotion and reported +22% persistence on days 7 and 8 — entirely
+  the next cycle's lift. The counter now resets on any promotion day.
+- **The leakage decomposition still finds almost nothing.** The shuffled split is optimistic
+  by 0.0718 against the honest arm's 0.0566, and the preprocessing leak differs in the
+  fourth decimal. Only the smuggled-`customers` arm is dramatic, at 0.998 with a *negative*
+  optimism — a protocol not lying about its own error at all, attached to a model that is
+  undeployable the same afternoon.
+
+## [0.4.0] — 2026-08-17
+
+The three defects the last release wrote down, closed. Two of them produced numbers that
+contradict what this repository previously argued, and both contradictions are in the
+release notes rather than under them.
+
+### Added
+
+- **A charge on stock in transit** — `simulate(..., transit_holding_cost=...)`, defaulting
+  to the on-hand rate because committed capital earns nothing on a lorry, with `0.0` for a
+  supplier-owned pipeline. Reported as its own `transit_cost` column, never blended into
+  holding. `--transit-holding-cost` on the command line. ADR 0011.
+- **Conditional coverage** — `metrics.coverage_by_segment` and
+  `report.conditional_coverage_to_markdown` score each store or month at each level with
+  the row count the number rests on. `stockout calibration --by store|month`. ADR 0012.
+- **Per-group calibration** — `ConformalQuantileForecaster(group_by=...)` learns a Mondrian
+  offset per group above a floor *derived* from the grid rather than chosen:
+  `conformity.min_rows_for` returns the count at which the strictest level stops
+  saturating. `pooled_fallback_groups` and `unseen_groups` name every group that took the
+  marginal offset instead. `--calibrate-by store`. ADR 0012.
+- **A calibration that carries its theorem** — `ConformalQuantileForecaster(refit=False)`
+  serves the probe itself, so the offsets describe the estimator that produced them. Made
+  possible by `design.GbmDesign` separating *boosting rows* from *feature history*: the
+  model trains on the inner window while still lagging across the calibration window, which
+  is the alignment problem ADR 0009 thought made this impossible. `--no-refit`. ADR 0013.
+
+### Changed
+
+- `stockout.__version__` is read from the installed distribution. It had said `0.1.0` since
+  the first release while `pyproject.toml` moved to `0.3.0` — hand-maintained in two places,
+  wrong in one, and silent because nothing imports a version to check it.
+- Six files split by responsibility to stay inside the 300-line limit, no behaviour
+  changed: `inventory/frontier.py`, `models/conformity.py`, `models/design.py`,
+  `models/protocols.py`, `commands.py`, and `test_cli.py` into three files.
+
+### Notes
+
+- **The transit charge multiplies lead-time costs eightfold and moves no ranking.** At a
+  seven-day lead time the cheapest level's total goes 271,616 → 2,153,995 and the cheapest
+  level stays 0.50. In steady state the pipeline holds throughput × lead time and
+  throughput is demand, which the service level does not change, so `transit_cost` varies
+  by 2.6% across the grid while `holding_cost` more than doubles. Omitting it was harmless
+  for ranking service levels and wrong by a factor of eight for quoting a cost.
+- **The marginal coverage number this repository has been publishing understated the worst
+  store by about two thirds.** Raw: worst marginal gap −0.193, worst store −0.314. After
+  calibration: −0.121 marginal against −0.207 for store 1. A pooled offset also has to be
+  wrong in two directions at once — store 2 now over-covers at three levels while store 1
+  under-covers at all six.
+- **Marginal calibration improved the conditional picture anyway**, narrowing the per-store
+  spread at the 0.90 from 0.229 to 0.115. Not luck: ADR 0009 divides each residual by the
+  model's own prediction, so the correction is relative and already scales with store level.
+  It was justified on heteroscedasticity grounds and bought conditional validity too.
+- **ADR 0009 predicted that serving the probe would be "a worse trade". It is not.**
+  Coverage improves at every level from the 0.80 up (0.90: −0.121 → −0.086; 0.99: −0.061 →
+  −0.026) and degrades at the median. The cost lands on the point forecast and lands
+  consistently — WMAPE 0.0723 → 0.0758, MAE 674.4 → 707.2, median pinball 337.2 → 353.6,
+  all three about 5%, which is what dropping 42 of ~600 training days buys.
+- **Those coverage differences are about 1.4 sigma on 140 test rows**, so `refit=True`
+  remains the default. Moving a default on that evidence is the error ADR 0009 refused when
+  it declined to pick a row threshold from four draws.
+- **On this data the per-group correction declines to act.** Four stores hold 35 trading
+  rows each against a derived floor of 199, so every group falls back to pooled and the
+  command says so. That is the honest result; Rossmann is worse per store, not better.
 
 ## [0.3.0] — 2026-08-16
 
@@ -147,7 +308,9 @@ First scaffold. The spine runs end to end; the learned models do not exist yet.
 - Stubs (`models/gbm.py`, `inventory/`) carry their reasoning and their skipped tests, so
   the specification is on record before the implementation.
 
-[Unreleased]: https://github.com/Surge77/stockout/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Surge77/stockout/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Surge77/stockout/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Surge77/stockout/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Surge77/stockout/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Surge77/stockout/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Surge77/stockout/releases/tag/v0.1.0
