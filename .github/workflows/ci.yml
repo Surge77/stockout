@@ -30,10 +30,9 @@ jobs:
           cache: pip
 
       - name: Install
-        # Editable, so the tests import the package exactly as a user would. `dev`
-        # pulls in the `gbm` extra: the gradient-boosted models are real code now, and
-        # code CI cannot execute is code CI cannot measure. The smoke job below installs
-        # the bare package instead, which is what keeps the lazy import honest.
+        # Editable, so the tests import the package exactly as a user would. There is no
+        # optional model extra any more — scikit-learn is a hard dependency, because
+        # every model in the registry is built from it. ADR 0018.
         run: pip install -e ".[dev]"
 
       - name: Lint
@@ -52,7 +51,7 @@ jobs:
     # Proves the offline path a new clone actually takes. The unit tests could all pass
     # while the CLI was broken by a bad default, and this is what catches that.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -84,30 +83,73 @@ jobs:
           python -m stockout backtest --model naive_last | tee naive.txt
           grep -q "loses" naive.txt
 
-      - name: Without the gbm extra, the model paths fail readably rather than crashing
-        # This job installs the bare package on purpose. `frontier` and `calibration` are
-        # the commands that need LightGBM, so they are also the proof that the import
-        # really is lazy: the CLI must parse, load the data and then say what to install —
-        # not raise ImportError at `import stockout`.
+      - name: Every registered model is reachable from the command line
+        # The registry is the only place a model's name is written down, and the parser
+        # builds `--model` from it. This asserts the two have not come apart: a model
+        # that is registered and not offered is a CLI lying about what it can do, and
+        # the failure is silent until somebody types the name.
         run: |
-          for command in frontier calibration; do
-            if python -m stockout "$command" 2> "$command.txt"; then
-              echo "expected a non-zero exit from $command without LightGBM installed"
-              exit 1
-            fi
-            cat "$command.txt"
-            grep -q "^error: LightGBM is not installed" "$command.txt"
-            grep -q "\[gbm\]" "$command.txt"
+          python -m stockout backtest --help | tee backtest-help.txt
+          python - <<'PY'
+          from pathlib import Path
+
+          from stockout.models import FORECASTER_NAMES
+
+          offered = Path("backtest-help.txt").read_text(encoding="utf-8")
+          missing = [name for name in FORECASTER_NAMES if name not in offered]
+          if missing:
+              raise SystemExit(f"registered but not offered by --model: {missing}")
+          print(f"all {len(FORECASTER_NAMES)} registered models are reachable")
+          PY
+
+      - name: A registered model survives the rolling-origin loop
+        run: |
+          python -m stockout backtest --model ridge --folds 3 | tee ridge.txt
+          grep -q "rolling-origin folds" ridge.txt
+
+      - name: The comparison names a winner and prints the floor beside it
+        # `dummy` is in every table on purpose: three balanced classes put the
+        # classification floor at 33% and R2 is *defined* as the improvement on the
+        # mean, so neither number can be read without it.
+        run: |
+          python -m stockout compare --models dummy linear ridge | tee compare.txt
+          grep -q "wins on wmape" compare.txt
+          grep -q "| dummy |" compare.txt
+          python -m stockout compare --task classification --models dummy logistic \
+            | tee compare-clf.txt
+          grep -q "wins on macro_f1" compare-clf.txt
+
+      - name: The leakage decomposition runs all four arms
+        run: |
+          python -m stockout leakage | tee leakage.txt
+          for arm in "honest" "shuffled split" "preprocessing leak" "future feature"; do
+            grep -q "$arm" leakage.txt
           done
 
-      - name: A model name that exists must be reachable from --help
-        # The registry is the only place a forecaster's name is written down. If a model
-        # is registered and the parser does not offer it, the CLI is lying about what it
-        # can do — and the failure is silent until someone types the name.
+      - name: A grid search reports what it searched
         run: |
-          python -m stockout frontier --help | tee frontier-help.txt
-          grep -q "gbm_conformal" frontier-help.txt
-          grep -q "lead-time" frontier-help.txt
+          python -m stockout tune --models ridge --folds 2 | tee tune.txt
+          grep -q "candidates" tune.txt
+          grep -q "alpha=" tune.txt
+
+      - name: Train and then serve one store-day from the artifact
+        # The round trip is the only thing that proves the artifact is complete: a
+        # fitted pipeline without its demand thresholds cannot answer the
+        # classification half, and nothing would say so until a request arrived.
+        run: |
+          python -m stockout train --regressor ridge --classifier logistic | tee train.txt
+          grep -q "features" train.txt
+          python -m stockout predict --store 1 --date 2015-01-02 | tee predict.txt
+          grep -q "predicted, class" predict.txt
+
+      - name: Forecasting past the lag horizon refuses rather than compounding
+        run: |
+          if python -m stockout predict --store 1 --date 2016-06-01 2> beyond.txt; then
+            echo "expected a refusal past the horizon the lag can reach"
+            exit 1
+          fi
+          cat beyond.txt
+          grep -q "^error: cannot forecast" beyond.txt
 
       # The absence of a shuffled splitter is checked by tests/test_no_random_splits.py,
       # which parses the AST rather than grepping. A text search cannot distinguish code
@@ -115,8 +157,8 @@ jobs:
       # step failed on exactly that, and on __pycache__ binaries.
 
   sample-drift:
-    # The generator is deterministic, so a regenerated sample should be byte-identical.
-    # A difference means the generator changed — which is allowed, and should be noticed.
+    # The generators are deterministic, so a regenerated sample should be byte-identical.
+    # A difference means a generator changed — which is allowed, and should be noticed.
     # Warns rather than fails: a deliberate change must not block a merge.
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -132,9 +174,15 @@ jobs:
         run: pip install -e .
 
       - name: Regenerate and compare
+        # Both files, because the store metadata has its own generator and its own
+        # missing-value patterns — a drift there changes which preprocessing branches
+        # the fixture exercises, and would otherwise go unremarked.
         run: |
-          cp data/sample_sales.csv /tmp/committed.csv
+          cp data/sample_sales.csv /tmp/committed_sales.csv
+          cp data/sample_stores.csv /tmp/committed_stores.csv
           python scripts/make_sample.py
-          if ! diff -q /tmp/committed.csv data/sample_sales.csv > /dev/null; then
-            echo "::warning::data/sample_sales.csv is stale — run scripts/make_sample.py and commit the result"
-          fi
+          for pair in "sales" "stores"; do
+            if ! diff -q "/tmp/committed_$pair.csv" "data/sample_$pair.csv" > /dev/null; then
+              echo "::warning::data/sample_$pair.csv is stale — run scripts/make_sample.py and commit the result"
+            fi
+          done
