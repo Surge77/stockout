@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Planned
 
+- The **loan classification task**: `Loan_Regression_Classification.xlsx` carries both
+  `Loan_Approved` (binary) and `Loan_Amount` (continuous, and zero exactly when the first
+  is), which is a paired classification-then-regression problem this package's machinery
+  can already answer and has not been pointed at
 - Answers to the five questions on **real** data. They are answered on the generator now,
   and three of the five came out flat or negative for reasons that are properties of the
   generator rather than of retail. This needs a Kaggle account and an accepted set of
@@ -19,6 +23,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   cannot test whether that is the right call on four stores
 - Something to replace the decision layer ADR 0014 removed. Accuracy is not what a
   replenishment decision is graded on, and nothing here now says what a forecast costs
+
+## [0.6.0] — 2026-08-18
+
+The web app four docstrings had been promising. A **user** module that forecasts and an
+**admin** module that trains and manages accounts, both served from the artefact the CLI
+already wrote.
+
+### Added
+
+- **`src/stockout_web/`** — FastAPI, Jinja2 templates, a vendored htmx, and no build step.
+  A separate package from `stockout` on purpose: `docs/architecture.md` claims everything
+  between `data/` and `persistence.py` is pure, and a web app is nothing but I/O. The app
+  imports the library and the library has never heard of the app.
+- **The user page answers both problems at once.** One store-day in; predicted sales from
+  the regression model *and* Low/Medium/High from the classification model out, with that
+  store's own cut points beside them. The two are different models and can disagree, and a
+  page showing one while implying both would be the most misleading thing here.
+- **The admin page** — artefact provenance and held-out scores, retrain and redeploy with
+  any pair from the registry, the whole-registry comparison table, and accounts.
+- **Auth**: session cookie, signed, httpOnly, 8 hours; bcrypt with a per-password salt;
+  SQLite with no ORM and every query parameterised. The role is read from the database on
+  every request rather than from the cookie, so deactivating an account takes effect
+  immediately. A wrong password and an unknown email give one message at equal cost. The
+  last active admin can be neither demoted nor deactivated. No built-in default account.
+- **A `web` CI job** that boots the app with uvicorn and probes it over HTTP. The unit
+  tests drive handlers in process and would all pass while the server failed to start.
+- **`pip install -e ".[web]"`** — an extra, because nothing in `src/stockout/` imports
+  FastAPI and somebody who wants the models should not be given a web server.
+
+### Changed
+
+- **Coverage sources both packages.** `stockout_web` is held at 100% rather than 90%: it
+  is where the auth lives, and a missing branch there is a way in rather than a number.
+- **The four docstrings that started this** — in `dataset.py`, `comparison.py`,
+  `adapter.py` and `persistence.py` — now name `stockout_web` and describe what it does,
+  including that it never accepts an uploaded model.
+- **`.env.example`** set `STOCKOUT_HORIZON_DAYS=42` against a default of 7 and carried an
+  inventory section for the layer ADR 0014 deleted. Rewritten, with the web settings added.
+
+### Fixed
+
+- **`users.normalise_email("@")` was accepted**, because the check was `"@" in address`.
+  Now requires something either side, exactly one `@`, and no whitespace — a sanity check
+  rather than RFC 5322 validation, and the docstring says which.
+- **The test suite's network guard blocked the event loop's own self-pipe.** Python builds
+  it with `socket.socketpair()`, which on Windows is a connected 127.0.0.1 pair, so a
+  blanket refusal made `TestClient` unusable while blocking nothing a test could reach. It
+  now allows loopback and refuses everything else, which is what the guard always meant.
+
+### Notes
+
+- **There is no model upload and no data upload, deliberately.** `joblib.load` executes
+  what it reads. An admin picks a model by name from the registry and this process writes
+  the file; accepting a `.joblib` over HTTP would be arbitrary code execution.
+- **The app starts with no model and no accounts**, because that is the first-run state —
+  an admin has to sign in before there is anything to serve, so a missing artefact is a
+  message on the page rather than a crash at boot.
+- Training and the comparison run in a worker thread. Seconds of CPU with no `await` in
+  them would otherwise block every other request, including the health check.
 
 ## [0.5.0] — 2026-08-18
 
@@ -308,7 +371,8 @@ First scaffold. The spine runs end to end; the learned models do not exist yet.
 - Stubs (`models/gbm.py`, `inventory/`) carry their reasoning and their skipped tests, so
   the specification is on record before the implementation.
 
-[Unreleased]: https://github.com/Surge77/stockout/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Surge77/stockout/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Surge77/stockout/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Surge77/stockout/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Surge77/stockout/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Surge77/stockout/compare/v0.2.0...v0.3.0
