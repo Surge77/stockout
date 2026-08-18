@@ -1,7 +1,8 @@
 """Run every registered model against one held-out window and tabulate what happened.
 
-This is the table the notebooks chart, the admin page displays and `docs/results.md`
-quotes, so it is built once here rather than three times in three places.
+This is the table the notebooks chart, `stockout compare` prints, the web app's admin page
+displays and `docs/results.md` quotes, so it is built once here rather than four times in
+four places.
 
 **The thresholds are refitted on the training slice.** `dataset.prepare` labels the whole
 frame, which is right for looking at data and wrong for scoring a model: a tercile cut

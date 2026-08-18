@@ -48,7 +48,8 @@ def to_float32(matrix: np.ndarray) -> np.ndarray:
     the seventh decimal place of a standardised feature.
 
     A module-level function rather than a lambda, because a lambda cannot be pickled and
-    the fitted pipeline has to survive `joblib.dump` for the web app to serve it.
+    the fitted pipeline has to survive `joblib.dump` — `stockout train` writes one, and
+    `stockout predict` and `stockout_web` both load it back.
     """
     return np.asarray(matrix, dtype="float32")
 

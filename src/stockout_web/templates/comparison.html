@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Comparison — stockout{% endblock %}
+{% block content %}
+
+<h1>{{ task|capitalize }} comparison</h1>
+<p class="lede">
+  Every registered model, one held-out window, same rows, same preprocessor. The only thing
+  that differs between two rows is the estimator &mdash; except where a model is capped,
+  and then <code>train_rows</code> says so.
+</p>
+
+<p>
+  <a class="button" href="/admin/comparison?task=regression">Regressors</a>
+  <a class="button" href="/admin/comparison?task=classification">Classifiers</a>
+  <a class="button" href="/admin">Back to admin</a>
+</p>
+
+<div class="card scroll">
+  <table class="results">
+    <thead>
+      <tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          {% for column in columns %}
+            {% set value = row[column] %}
+            <td class="{{ 'metric' if column == metric else '' }}">
+              {% if value is number and value is not integer %}{{ "%.3f"|format(value) }}
+              {% elif value is integer %}{{ "{:,}".format(value) }}
+              {% else %}{{ value }}{% endif %}
+            </td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="hint">
+  Lower is better for <code>wmape</code>; higher is better for <code>macro_f1</code>.
+  <code>seconds</code> is wall clock on this machine and is the one column that will not
+  reproduce &mdash; but a model scoring 0.843 in two seconds and one scoring 0.823 in eight
+  are not the same result.
+</p>
+
+{% endblock %}

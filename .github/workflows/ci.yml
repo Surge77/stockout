@@ -32,8 +32,10 @@ jobs:
       - name: Install
         # Editable, so the tests import the package exactly as a user would. There is no
         # optional model extra any more — scikit-learn is a hard dependency, because
-        # every model in the registry is built from it. ADR 0018.
-        run: pip install -e ".[dev]"
+        # every model in the registry is built from it. ADR 0018. `web` is included
+        # because `tests/web/` is uncollectable without FastAPI, and a suite that skips
+        # itself when a dependency is missing is a suite that stops covering the app.
+        run: pip install -e ".[dev,web]"
 
       - name: Lint
         # `check` only. `ruff format` is never run here — see ADR 0004.
@@ -155,6 +157,70 @@ jobs:
       # which parses the AST rather than grepping. A text search cannot distinguish code
       # from the docstrings explaining why the code is absent — the first version of this
       # step failed on exactly that, and on __pycache__ binaries.
+
+  web:
+    # The app a person actually runs: uvicorn boots it, the static mount serves files, and
+    # a signed-out request is redirected. The unit tests drive the handlers in process and
+    # would all pass while the server failed to start.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[web]"
+
+      - name: Train something for it to serve
+        run: python -m stockout train --regressor ridge --classifier logistic
+
+      - name: Boot the server and probe it
+        env:
+          STOCKOUT_WEB_SECRET: a-secret-for-ci-only
+        run: |
+          uvicorn stockout_web.main:app --host 127.0.0.1 --port 8000 --log-level warning &
+          python - <<'PY'
+          import http.client
+          import sys
+          import time
+
+          def probe(path):
+              connection = http.client.HTTPConnection("127.0.0.1", 8000, timeout=10)
+              connection.request("GET", path)
+              response = connection.getresponse()
+              body = response.read().decode("utf-8", "replace")
+              headers = {k.lower(): v for k, v in response.getheaders()}
+              connection.close()
+              return response.status, body, headers
+
+          for _ in range(60):
+              try:
+                  probe("/health")
+                  break
+              except OSError:
+                  time.sleep(1)
+          else:
+              sys.exit("the server never came up")
+
+          status, body, _ = probe("/health")
+          assert status == 200 and '"model_loaded":true' in body, body
+
+          status, body, _ = probe("/login")
+          assert status == 200 and 'name="password"' in body, "the login form did not render"
+
+          status, _, headers = probe("/")
+          assert status == 303 and headers["location"] == "/login", "signed out was not redirected"
+
+          for asset in ("/static/style.css", "/static/htmx.min.js"):
+              status, body, _ = probe(asset)
+              assert status == 200 and body, f"{asset} was not served"
+
+          print("the app boots, renders, redirects and serves its assets")
+          PY
 
   sample-drift:
     # The generators are deterministic, so a regenerated sample should be byte-identical.

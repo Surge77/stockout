@@ -22,8 +22,11 @@ a conversion step to solve a portability problem this project does not have.
 
 **Nothing here is a trust boundary.** `joblib.load` executes code in the file it reads, so
 an artifact is exactly as trustworthy as whoever wrote it. `load` refuses paths outside
-the configured artifact directory for that reason — the web app takes an upload of *data*
-from an admin, never of a model.
+the configured artifact directory for that reason. Neither the CLI nor `stockout_web` ever
+accepts an artifact from outside: an admin picks a model *by name* from the registry and
+this process writes the file. Accepting a `.joblib` over HTTP would be arbitrary code
+execution, and the directory check is a guard against a careless caller rather than a
+sandbox.
 """
 
 from __future__ import annotations

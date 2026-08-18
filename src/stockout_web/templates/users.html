@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Users — stockout{% endblock %}
+{% block content %}
+
+<h1>Accounts</h1>
+
+<div class="card scroll">
+  <table class="results">
+    <thead>
+      <tr><th>id</th><th>email</th><th>role</th><th>status</th><th>created</th><th>change</th></tr>
+    </thead>
+    <tbody>
+      {% for account in accounts %}
+        <tr class="{{ 'inactive' if not account.is_active else '' }}">
+          <td>{{ account.id }}</td>
+          <td>{{ account.email }}</td>
+          <td>{% if account.is_admin %}<b class="tag">admin</b>{% else %}user{% endif %}</td>
+          <td>{{ "active" if account.is_active else "deactivated" }}</td>
+          <td class="mono">{{ account.created_at }}</td>
+          <td class="actions">
+            <form method="post" action="/admin/users/{{ account.id }}/role" class="inline">
+              <select name="role">
+                {% for role in roles %}
+                  <option value="{{ role }}" {% if role == account.role %}selected{% endif %}>{{ role }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit">Set role</button>
+            </form>
+            <form method="post" action="/admin/users/{{ account.id }}/active" class="inline">
+              <input type="hidden" name="is_active" value="{{ 'false' if account.is_active else 'true' }}">
+              <button type="submit">{{ "Deactivate" if account.is_active else "Restore" }}</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<form class="card narrow" method="post" action="/admin/users">
+  <h2>Add an account</h2>
+  <label>Email <input type="email" name="email" required autocomplete="off"></label>
+  <label>Password <input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+  <label>Role
+    <select name="role">
+      {% for role in roles %}<option value="{{ role }}">{{ role }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Create</button>
+</form>
+
+<p class="hint">
+  Accounts are deactivated, never deleted: an account that has used the system is a fact
+  about what happened, and a delete makes an audit trail point at a row that is not there.
+  The last active admin can be neither demoted nor deactivated.
+</p>
+
+{% endblock %}

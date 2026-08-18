@@ -7,8 +7,8 @@ Get the order wrong and the failure is quiet — `add_store_features` before the
 silently produces nothing, `date_major` before the lags builds them across store
 boundaries.
 
-So the order lives here once, and `notebooks/`, the CLI and the web app all call the same
-function. A pipeline that is written down in four places is four pipelines.
+So the order lives here once, and `notebooks/`, the CLI and `stockout_web` all call the
+same function. A pipeline that is written down in four places is four pipelines.
 
 **The warm-up drop is not optional.** `sales_lag_28` is null for a store's first 28 rows
 and `sales_roll_mean_91` for its first 91. Handing those to an imputer would fill them

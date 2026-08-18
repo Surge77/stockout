@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == 'register' %}Register{% else %}Sign in{% endif %} — stockout{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>{% if mode == 'register' %}Create an account{% else %}Sign in{% endif %}</h1>
+
+  <form method="post" action="{% if mode == 'register' %}/register{% else %}/login{% endif %}">
+    <label>Email
+      <input type="email" name="email" value="{{ email or '' }}" required autocomplete="username">
+    </label>
+    <label>Password
+      <input type="password" name="password" required minlength="8"
+             autocomplete="{% if mode == 'register' %}new-password{% else %}current-password{% endif %}">
+    </label>
+    {% if mode == 'register' %}<p class="hint">At least 8 characters.</p>{% endif %}
+    <button type="submit">{% if mode == 'register' %}Create account{% else %}Sign in{% endif %}</button>
+  </form>
+
+  <p class="hint">
+    {% if mode == 'register' %}
+      Already registered? <a href="/login">Sign in</a>.
+      The first account created becomes the admin; every one after it is a normal user.
+    {% else %}
+      No account? <a href="/register">Register</a>.
+    {% endif %}
+  </p>
+</div>
+{% endblock %}
