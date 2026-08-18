@@ -1,5 +1,9 @@
 # 0002 — Gradient boosting, not a sequence model
 
+> **Amended by [ADR 0018](0018-histgradientboosting-replaces-lightgbm.md).**
+> The argument for gradient boosting over a sequence model stands. The library named
+> in it does not: LightGBM was replaced by scikit-learn's `HistGradientBoosting*`.
+
 ## Situation
 
 "Demand forecasting" invites an LSTM, a Temporal Fusion Transformer, or whatever is

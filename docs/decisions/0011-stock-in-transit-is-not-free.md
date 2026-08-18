@@ -1,5 +1,11 @@
 # 0011 — Stock in transit is charged for, at the shelf rate until told otherwise
 
+> **Superseded by [ADR 0014](0014-a-scikit-learn-comparison-not-an-inventory-system.md).**
+> The code this records — the quantile models, the conformal calibration and the
+> inventory simulator — was removed in `c7fadcb`. The record is kept because a
+> decision log that is edited to match the present is not a log; nothing below
+> describes code that ships today.
+
 ## Situation
 
 ADR 0010 opened a delivery pipeline and wrote down what it left undone:

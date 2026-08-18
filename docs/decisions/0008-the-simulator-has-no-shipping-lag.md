@@ -1,5 +1,11 @@
 # 0008 — The simulator prices a repeated newsvendor, not an (R, S) system
 
+> **Superseded by [ADR 0014](0014-a-scikit-learn-comparison-not-an-inventory-system.md).**
+> The code this records — the quantile models, the conformal calibration and the
+> inventory simulator — was removed in `c7fadcb`. The record is kept because a
+> decision log that is edited to match the present is not a log; nothing below
+> describes code that ships today.
+
 > **Extended by [ADR 0010](0010-the-pipeline-is-opt-in-and-the-critical-ratio-does-not-survive-it.md).**
 > `simulate` now takes a `lead_time_days`, and everything below describes what it does at
 > the default of `0`. Nothing here is retracted: the trap this ADR documents is still a

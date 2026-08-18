@@ -1,5 +1,11 @@
 # 0012 — Measure coverage per group always; correct per group only when the rows allow it
 
+> **Superseded by [ADR 0014](0014-a-scikit-learn-comparison-not-an-inventory-system.md).**
+> The code this records — the quantile models, the conformal calibration and the
+> inventory simulator — was removed in `c7fadcb`. The record is kept because a
+> decision log that is edited to match the present is not a log; nothing below
+> describes code that ships today.
+
 ## Situation
 
 ADR 0009 recorded a cost it could not see:
