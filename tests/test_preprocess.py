@@ -8,6 +8,7 @@ import pytest
 
 from stockout.data import schemas as s
 from stockout.features.preprocess import ColumnRoles, column_roles, make_preprocessor
+from stockout.features.store_features import MONTH_TOKENS
 
 
 def _frame() -> pd.DataFrame:
@@ -153,6 +154,29 @@ def test_a_store_with_no_promotion_calendar_vectorises_to_zeros() -> None:
     roles = ColumnRoles(numeric=(), categorical=(), ordinal=(), text=s.PROMO_INTERVAL)
     out = _dense(make_preprocessor(roles).fit_transform(_frame()))
     assert out[1].sum() == 0.0
+
+
+def test_a_fold_where_nobody_promotes_still_produces_every_month_column() -> None:
+    """The vocabulary is fixed, so it cannot depend on which stores landed in the fold.
+
+    Learned from the documents, this raised `empty vocabulary; perhaps the documents only
+    contain stop words` four frames inside a `ColumnTransformer` — which is what fitting
+    on a single store that runs no continuing promotion looks like.
+    """
+    nobody = pd.DataFrame({s.PROMO_INTERVAL: pd.array(["", "", ""], dtype="string")})
+    roles = ColumnRoles(numeric=(), categorical=(), ordinal=(), text=s.PROMO_INTERVAL)
+    pipeline = make_preprocessor(roles).fit(nobody)
+
+    names = set(pipeline.get_feature_names_out())
+    assert {"jan", "sept", "dec"} <= names
+    assert _dense(pipeline.transform(nobody)).sum() == 0.0
+
+
+def test_the_month_vocabulary_is_the_one_the_promotion_feature_reads() -> None:
+    """Two consumers of the same tokens, so neither can drift on how September is spelt."""
+    roles = ColumnRoles(numeric=(), categorical=(), ordinal=(), text=s.PROMO_INTERVAL)
+    pipeline = make_preprocessor(roles).fit(_frame())
+    assert set(pipeline.get_feature_names_out()) == set(MONTH_TOKENS)
 
 
 def test_a_null_calendar_does_not_reach_the_vectoriser() -> None:

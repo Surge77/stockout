@@ -25,11 +25,12 @@ constant; and it would be 1115 coefficients nobody can defend. The store's *leve
 already carried causally by `sales_roll_mean_*`, which is learned from its own history
 rather than from 1115 free parameters. ADR 0019.
 
-**Text** — `TfidfVectorizer` on `promo_interval`. Honestly: three distinct values in the
-whole dataset, so on its own this is a scaled one-hot in a costume, and it is constant per
-store and constant in time. The feature that actually earns its place is
-`store_features.is_promo2_month`, which crosses the same column with the row's calendar.
-Both are here, and the pair is the honest answer to "what does the vectoriser buy you".
+**Text** — `TfidfVectorizer` on `promo_interval`, over a **fixed** month vocabulary.
+Honestly: three distinct values in the whole dataset, so on its own this is a scaled
+one-hot in a costume, and it is constant per store and constant in time. The feature that
+actually earns its place is `store_features.is_promo2_month`, which crosses the same
+column with the row's calendar. Both are here, and the pair is the honest answer to "what
+does the vectoriser buy you".
 """
 
 from __future__ import annotations
@@ -45,11 +46,27 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
 from ..data import schemas as s
+from .store_features import MONTH_TOKENS
 
-#: Month tokens are two to four letters, so the default pattern's two-character minimum
+#: Month tokens are three or four letters, so the default pattern's two-character minimum
 #: would be fine — but it is stated rather than inherited, because a silently changed
 #: default here empties the vocabulary and the branch keeps running with zero features.
 _TOKEN_PATTERN = r"(?u)\b[A-Za-z]{3,4}\b"
+
+#: The vocabulary is **fixed**, not learned. Twelve months are a closed set known before
+#: any data is read, and learning them from the training rows made this branch depend on
+#: which stores happened to land in the fold: a slice where no store runs a continuing
+#: promotion contains no month tokens at all, and `TfidfVectorizer` answers that with
+#: `empty vocabulary; perhaps the documents only contain stop words`, raised four frames
+#: inside a `ColumnTransformer`. That is not an exotic shape — it is what fitting on a
+#: single store looks like, which the notebook does in Q2.
+#:
+#: It also makes the branch emit the same columns in the same order for every fold, which
+#: a learned vocabulary does not guarantee. Taken from `store_features` rather than
+#: restated, so the column that says *this row is in a promotion month* and the columns
+#: that say *which months this store promotes in* cannot come to disagree about how
+#: September is spelled.
+_MONTH_VOCABULARY: tuple[str, ...] = tuple(MONTH_TOKENS)
 
 
 @dataclass(frozen=True)
@@ -128,9 +145,21 @@ def make_preprocessor(roles: ColumnRoles, *, drop_first: bool = False) -> Column
 
 
 def _numeric_branch() -> Pipeline:
+    """Median-impute, then standardise.
+
+    `keep_empty_features=True` for the same reason the text branch fixes its vocabulary:
+    a column with no observed values at all in the training slice is otherwise *dropped*,
+    silently, with a warning from four frames down. On the full file that never happens;
+    on a single store that has never run the continuing promotion, `promo2_since_week` and
+    `promo2_since_year` are entirely null and two features vanish from the matrix.
+
+    Kept and filled with zero instead. A constant column teaches an estimator nothing,
+    which is the honest outcome — it is a column about which this slice knows nothing —
+    and the matrix keeps the same width for every fold.
+    """
     return Pipeline(
         [
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
             ("scale", StandardScaler()),
         ]
     )
@@ -173,7 +202,14 @@ def _text_branch() -> Pipeline:
             # document is the honest encoding: this store repeats its promotion in no
             # months, because it runs no continuing promotion.
             ("fill", FunctionTransformer(_as_documents, feature_names_out="one-to-one")),
-            ("vectorise", TfidfVectorizer(token_pattern=_TOKEN_PATTERN, lowercase=True)),
+            (
+                "vectorise",
+                TfidfVectorizer(
+                    token_pattern=_TOKEN_PATTERN,
+                    lowercase=True,
+                    vocabulary=_MONTH_VOCABULARY,
+                ),
+            ),
         ]
     )
 

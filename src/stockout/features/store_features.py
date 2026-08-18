@@ -39,7 +39,12 @@ STORE_FEATURE_COLUMNS: tuple[str, ...] = (
 #: `Sept` in the source file, not `Sep`. Both are accepted rather than only the one
 #: currently shipped, because this mapping breaking is silent — an unmatched month makes
 #: `is_promo2_month` quietly zero everywhere and the feature simply stops working.
-_MONTH_TOKENS: dict[str, int] = {
+#:
+#: Public because `features/preprocess.py` hands the same token set to `TfidfVectorizer`
+#: as a fixed vocabulary. One list, so the column that says *this row is in a promotion
+#: month* and the columns that say *which months this store promotes in* cannot come to
+#: disagree about how September is spelled.
+MONTH_TOKENS: dict[str, int] = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
     "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
 }  # fmt: skip
@@ -145,4 +150,4 @@ def _is_promo2_month(frame: pd.DataFrame) -> pd.Series:
 def _months_in(interval: str) -> frozenset[int]:
     """`"Jan,Apr,Jul,Oct"` -> `{1, 4, 7, 10}`. An unrecognised token is dropped."""
     tokens = (token.strip().lower() for token in interval.split(","))
-    return frozenset(_MONTH_TOKENS[token] for token in tokens if token in _MONTH_TOKENS)
+    return frozenset(MONTH_TOKENS[token] for token in tokens if token in MONTH_TOKENS)
