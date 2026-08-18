@@ -20,13 +20,34 @@ after the file is changed, and rotation is the only fix.
 
 ## Untrusted input
 
-`read_sales` will parse any CSV handed to it. It does not evaluate anything and there is
-no `pickle`, no `eval`, and no `yaml.load` anywhere in the package, so a hostile CSV can
-produce a wrong answer or an exception but not code execution.
+`read_sales` will parse any CSV handed to it. It does not evaluate anything, and there is
+no `eval`, no `exec` and no `yaml.load` on any data path, so a hostile CSV can produce a
+wrong answer or an exception but not code execution.
 
-Model artefacts, once `models/gbm.py` exists, will be LightGBM's own text format rather
-than pickles, for the same reason: loading a pickle from an untrusted source is arbitrary
-code execution and there is no need to accept that risk here.
+## Model artefacts execute code, and this is the one real risk here
+
+`stockout train` writes a fitted pipeline with `joblib.dump`, and **`joblib.load` is
+pickle**: loading an artefact runs whatever code is inside it. An earlier version of this
+file said the package contained no pickle anywhere, which stopped being true when
+`persistence.py` was added.
+
+A model artefact is therefore exactly as trustworthy as whoever wrote it, and it is not a
+format to accept from a stranger. Two things follow, and both are enforced rather than
+advised:
+
+- **`persistence.load` refuses any path outside `config.ARTIFACT_DIR`.** The path is not a
+  free parameter a caller or a request gets to choose, and `--model-path` is checked
+  against that directory before the file is opened.
+- **Nothing in this package accepts an uploaded model.** The only artefacts it reads are
+  ones it wrote.
+
+That directory check is a guard against a careless caller, **not a sandbox**. It does not
+make a malicious `.joblib` safe; it makes one harder to get in front of `load` by accident.
+If you need to accept models from elsewhere, convert to a format that does not execute —
+ONNX or a plain parameter dump — rather than relying on the path check.
+
+`ARTIFACT_VERSION` is a correctness guard rather than a security one: an old artefact
+loaded by new code is refused, because it usually half-works instead of failing.
 
 ## Dependencies
 
