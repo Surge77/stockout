@@ -70,12 +70,12 @@ web = [
     "itsdangerous==2.2.0",
 ]
 dev = [
-    "pytest==9.0.3",
+    "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "ruff==0.16.3",
     "pyright==1.1.411",
     "pandas-stubs==3.0.5.260730",
-    "hypothesis==6.165.6",
+    "hypothesis==6.165.10",
     # Drives FastAPI's TestClient: no live server, no port, no sleep. `httpx2`
     # rather than `httpx`, because Starlette 1.6 raises a deprecation warning on
     # the latter and `filterwarnings = ["error"]` turns that into a failed import.
