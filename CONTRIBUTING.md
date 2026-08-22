@@ -1,6 +1,15 @@
 # Contributing
 
-## The one rule
+## What this project is
+
+**stockout — Retail Sales and Product Demand Prediction.** It predicts store-day sales
+and classifies demand as Low, Medium or High, on retail store-day data.
+
+The domain is fixed. A pull request that points this package at non-retail data will be
+closed regardless of how clean it is: a constraint on technique is never a licence to
+change what the project predicts.
+
+## The one rule about technique
 
 **Only concepts taught in `ML/Resource Files` and `ML/Personal Files` may be used, plus
 the three documented exceptions.**

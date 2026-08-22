@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Admin — stockout{% endblock %}
+
+{% block content %}
+<h1>Analytics Dashboard</h1>
+<p class="lede">Machine learning model performance overview.</p>
+
+{% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
+
+<div class="cards">
+  {% for card in cards %}
+  <div class="card metric">
+    <h3>{{ card.name }}</h3>
+    <p class="metric-line">{{ card.metric }}: <strong>{{ card.value }}</strong></p>
+    <div class="bar"><span style="width: {{ card.percent }}%"></span></div>
+  </div>
+  {% endfor %}
+</div>
+
+<p class="note">
+  A regressor has no accuracy and a classifier has no r². Each card names the metric its
+  own task actually produces, so nothing on this page is a number that cannot exist.
+</p>
+
+<section class="card">
+  <h2>Deployed model</h2>
+  <dl class="facts">
+    <dt>Dataset</dt><dd>{{ dataset }} — {{ entity_count }} {{ entity_label }}s, {{ date_min }} to {{ date_max }}</dd>
+    <dt>Regression</dt><dd>{{ artifact.regressor_name }} → sales</dd>
+    <dt>Classification</dt><dd>{{ artifact.classifier_name }} → demand class</dd>
+    <dt>Trained</dt><dd>{{ artifact.trained_at }}</dd>
+    <dt>Rows</dt><dd>{{ '{:,}'.format(artifact.n_train) }} train / {{ '{:,}'.format(artifact.n_test) }} held out</dd>
+    <dt>Cut points</dt><dd>{{ artifact.thresholds|length }} {{ entity_label }}s with their own terciles</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Retrain and redeploy</h2>
+  <p class="note">
+    Fits a new pair on the same dataset and swaps it in. Takes a few seconds; the running
+    pair keeps answering until the new one is ready.
+  </p>
+  <form method="post" action="/admin/train" class="form inline-form">
+    <div class="field">
+      <label for="regressor">Regressor</label>
+      <select id="regressor" name="regressor">
+        {% for name in regressors %}
+        <option value="{{ name }}" {% if name == artifact.regressor_name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="classifier">Classifier</label>
+      <select id="classifier" name="classifier">
+        {% for name in classifiers %}
+        <option value="{{ name }}" {% if name == artifact.classifier_name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">Train and deploy</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Compare every model</h2>
+  <p><a href="/admin/comparison">Open the full comparison table →</a></p>
+</section>
+{% endblock %}

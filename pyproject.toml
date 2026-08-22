@@ -4,13 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockout"
-version = "0.8.0"
-description = "Thirteen scikit-learn models on two course datasets, behind one Pipeline each, scored on one held-out split."
+version = "0.9.0"
+description = "Retail sales and product demand prediction: store-day sales regression, Low/Medium/High demand classification, a CLI and a web app."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "TEJAS", email = "tejasdeshmane66@gmail.com" }]
-keywords = ["regression", "classification", "scikit-learn", "pipeline", "teaching"]
+keywords = [
+    "retail",
+    "demand-prediction",
+    "sales-forecasting",
+    "regression",
+    "classification",
+    "scikit-learn",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Education",
@@ -33,14 +40,27 @@ dependencies = [
     "seaborn==0.13.2",
     "scikit-learn==1.9.0",
     "joblib==1.5.3",
+    "kaggle==2.2.4",
 ]
 
 [project.optional-dependencies]
+# The web app is an extra: nothing in src/stockout/ imports FastAPI, and a plain
+# install should not pull a web server for somebody who wants the models.
+web = [
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.3",
+    "jinja2==3.1.6",
+    "python-multipart==0.0.32",
+    "bcrypt==5.0.0",
+    "itsdangerous==2.2.0",
+]
 notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0", "nbconvert==7.16.4"]
 dev = [
     "ruff==0.16.3",
     "pyright==1.1.411",
     "pandas-stubs==3.0.5.260730",
+    "pytest==9.0.3",
+    "httpx2==2.12.0",
 ]
 
 [project.urls]
@@ -57,11 +77,15 @@ where = ["src"]
 [tool.setuptools.package-data]
 stockout = ["py.typed"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
 [tool.pyright]
 # Point at the in-repo virtualenv so the editor and the CLI resolve the same pandas.
 venvPath = "."
 venv = ".venv"
-include = ["src", "scripts"]
+include = ["src", "scripts", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 reportMissingImports = true

@@ -9,6 +9,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 - Nothing.
 
+## [0.9.0] — 2026-08-22
+
+**The retail domain is restored, and the panels are back.** `0.7.0` stripped the package to
+concepts taught in the ML course folder and, because that folder holds no retail data, moved
+it onto salary-prediction and loan-approval datasets. That was wrong. A constraint on which
+*techniques* are allowed is not permission to change *what the project predicts*, and every
+gate stayed green while the project stopped being the project.
+
+The package predicts retail sales and product demand. It always did.
+
+### Added
+
+- **The retail data is back and larger.** `data/sample_sales.csv` is 54,660 store-days
+  across 50 stores and three years, up from the old committed sample's 2,830 rows and four
+  stores. Deterministic and offline; resize with `python scripts/make_sample.py 50 1095`.
+- **`stockout fetch`** and the `kaggle` dependency, for the real Rossmann competition data.
+  A 403 from an unaccepted competition is turned into an instruction rather than passed
+  through as an opaque error.
+- **`data/adapters.py`** — one loader per source, both producing the same canonical columns
+  (`entity, date, sales, open, promo, state_holiday, school_holiday`), so the registry, the
+  comparison table and the panels are written once. Another retail source is one function.
+- **`features.py`** — calendar features, store-metadata ages, and the fixed `LabelEncoder`
+  vocabulary. **`LabelEncoder` is taught and had been unused since 0.7.0**, because salary
+  and loans were entirely numeric; retail data has real categorical columns, so the
+  restoration made the taught-concepts constraint easier rather than harder.
+- **`targets.py`** — demand classes as **per-store terciles fitted on the training rows
+  alone**. Global cut points would make a big store "High" on 94% of days, so the classifier
+  would learn store identity, score ~95% and know nothing.
+- **`src/stockout_web/`** — the user and admin panels. The whole accounts layer restores
+  unchanged from 0.6.0, including the privilege-escalation fix at `5c54ea9`: the first
+  account becomes admin inside the `INSERT`, so two simultaneous registrations on an empty
+  table cannot both become one.
+- **`tests/test_auth.py`** — 10 tests, auth and access control only. Everywhere else a bug
+  is a wrong number; there it is a way in.
+- **`stockout datasets`**, and `--dataset` on every data command.
+
+### Changed
+
+- **`train` fits both models.** The product answers two questions per store-day and they are
+  separate models that can disagree, so shipping one left half the panel unable to answer.
+  Artefact v3 carries both, the per-store cut points, the label encoders and the store
+  metadata — a predicted number cannot be classified without the first, and a serving row
+  cannot be built without the other two.
+- **Closed days are dropped from every metric.** A shut store sells exactly zero and every
+  model predicts zero; keeping those 7,937 rows would have flattered every score in the
+  package by an amount bought entirely by predicting that a shut shop sells nothing.
+- **The admin dashboard labels each metric by task.** A regressor has no accuracy. Cards
+  show `R² Score` for regressors and `Accuracy` for classifiers, so nothing on the page is a
+  number that cannot exist.
+- **The user panel shows the spread.** The deployed answer is displayed large, with an
+  expandable section listing what all seven regressors predicted for the same row — on one
+  store-day they span 6,271 to 8,663.
+- `predict` takes `--store`, `--date`, `--promo` and the holiday flags, and answers with
+  both a number and a class. The salary-shaped `--set name=value` interface is gone.
+- Runtime dependencies gain `kaggle`; the `web` extra is back.
+
+### Removed
+
+- **`data/salary.csv` and `data/loans.csv`**, and every reference to them. They were never
+  related to retail sales or product demand.
+
+### Results
+
+On 46,723 open store-days, regression r²: `linear` 0.3029, `polynomial` 0.6527,
+`gradient_boosting` 0.8674, `random_forest` 0.9249. Retail demand is where the extra
+complexity pays — a promotion on a Saturday is not a promotion plus a Saturday, and a linear
+model has no way to represent an interaction.
+
+Classification accuracy against a 34.2% floor: `logistic` 0.5987 up to `svc` 0.7671. Every
+model clears the floor, so every one has learnt something.
+
+### Note on scope
+
+Ten of the thirteen models are taught in the course notebooks; `RandomForestRegressor`,
+`GradientBoostingRegressor` and `VotingRegressor` are the three documented exceptions from
+`0.8.0`, still flagged `taught=False` and still named in every table. FastAPI, bcrypt and
+SQLite are not ML concepts and are not counted against that rule — the rule governs which
+estimators and preprocessing the package uses, not whether it may have a web server.
+
 ## [0.8.0] — 2026-08-22
 
 Three regressors added back by request, one release after `0.7.0` removed everything

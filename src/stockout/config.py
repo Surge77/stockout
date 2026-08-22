@@ -8,8 +8,17 @@ from typing import Literal
 _ROOT = Path(__file__).resolve().parent.parent.parent
 
 DATA_DIR = _ROOT / "data"
-SALARY_PATH = DATA_DIR / "salary.csv"
-LOANS_PATH = DATA_DIR / "loans.csv"
+
+#: The committed retail sample: store-day sales, and one row per store of metadata.
+#: Two files rather than one because the real Rossmann data is two files, and
+#: flattening the join would repeat each store's metadata across every one of its rows.
+SAMPLE_PATH = DATA_DIR / "sample_sales.csv"
+SAMPLE_STORES_PATH = DATA_DIR / "sample_stores.csv"
+
+#: Downloaded sources land here. Never committed: Rossmann, Walmart, Store Item
+#: Demand and Superstore all forbid redistribution, which is why the synthetic
+#: sample exists at all.
+RAW_DIR = DATA_DIR / "raw"
 
 #: Trained models land here. `persistence.load` refuses to read from anywhere else,
 #: because loading a joblib file executes code from it.

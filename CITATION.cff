@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "stockout: ten scikit-learn models on one preprocessing pipeline"
+title: "stockout: retail sales and product demand prediction"
 message: "If you use this software, please cite it as below."
 type: software
 authors:
@@ -9,18 +9,18 @@ authors:
 repository-code: "https://github.com/Surge77/stockout"
 url: "https://github.com/Surge77/stockout"
 abstract: >-
-  A teaching package that fits four regressors and six classifiers on two tabular
-  datasets, each behind the same StandardScaler pipeline, and compares them on one
-  held-out split so the estimator is the only thing that varies between rows of the
-  results table. Deliberately restricted to the scikit-learn surface covered by an
-  introductory course: train_test_split, Pipeline, StandardScaler, PolynomialFeatures,
-  the linear models, the tree and kernel classifiers, and three metrics.
+  Retail sales and product demand prediction. Given a store and a day, the package
+  predicts that store-day's sales and classifies it as Low, Medium or High demand,
+  from store attributes, calendar position, promotions and holidays. Every model sits
+  behind the same preprocessing pipeline and is scored on the same held-out rows, so
+  the estimator is the only thing that varies between rows of the results table.
 keywords:
-  - scikit-learn
+  - retail
+  - demand-prediction
+  - sales-forecasting
   - regression
   - classification
-  - pipeline
-  - teaching
+  - scikit-learn
 license: MIT
 version: 0.7.0
 date-released: "2026-08-22"

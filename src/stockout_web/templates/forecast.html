@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Forecast — stockout{% endblock %}
+
+{% block content %}
+<h1>Retail sales and demand</h1>
+<p class="lede">
+  Pick a {{ entity_label }} and a day. The answer is two predictions from two different
+  models: how much it will sell, and whether that is a Low, Medium or High demand day
+  <em>for that {{ entity_label }}</em>.
+</p>
+
+<form method="post" action="/forecast" class="card form">
+  <div class="field">
+    <label for="store">{{ entity_label|capitalize }}</label>
+    <select id="store" name="store" required>
+      {% for option in entities %}
+        <option value="{{ option }}" {% if option == store %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" required
+           value="{{ date or date_max }}" min="{{ date_min }}" max="{{ date_max }}">
+    <small>The model was fitted on {{ date_min }} to {{ date_max }}.</small>
+  </div>
+
+  <div class="field checks">
+    <label><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion running</label>
+    <label><input type="checkbox" name="school_holiday" value="true"> School holiday</label>
+  </div>
+
+  <button type="submit">Predict</button>
+</form>
+
+{% if answer %}
+<section class="card result">
+  <h2>{{ entity_label|capitalize }} {{ answer.entity }} — {{ answer.date.strftime('%A %d %B %Y') }}</h2>
+
+  <div class="answers">
+    <div class="answer">
+      <span class="answer-label">Predicted sales</span>
+      <span class="answer-value">{{ sales }}</span>
+      <small>{{ regressor|replace('_', ' ') }}</small>
+    </div>
+    <div class="answer">
+      <span class="answer-label">Demand class</span>
+      <span class="answer-value class-{{ demand_class|lower }}">{{ demand_class }}</span>
+      <small>{{ classifier|replace('_', ' ') }}</small>
+    </div>
+  </div>
+
+  <p class="cuts">
+    This {{ entity_label }}'s own cut points:
+    <strong>Low</strong> &lt;{{ low_cut }} &middot;
+    <strong>Medium</strong> {{ low_cut }}–{{ high_cut }} &middot;
+    <strong>High</strong> &gt;{{ high_cut }}
+  </p>
+  <p class="note">
+    The two answers come from separate models and can disagree. Neither is a correction
+    of the other.
+  </p>
+
+  {% if per_model %}
+  <details class="compare">
+    <summary>What every model predicted for this row ({{ per_model|length }})</summary>
+    <table>
+      <thead><tr><th>Model</th><th class="num">Predicted sales</th></tr></thead>
+      <tbody>
+        {% for name, value in per_model %}
+        <tr {% if name == deployed %}class="deployed"{% endif %}>
+          <td>{{ name|replace('_', ' ') }}{% if name == deployed %} <b class="tag">deployed</b>{% endif %}</td>
+          <td class="num">{{ '{:,.0f}'.format(value) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">
+      They disagree because they are different models, not because one is broken. The
+      spread is the honest width of the estimate.
+    </p>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

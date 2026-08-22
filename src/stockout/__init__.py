@@ -1,4 +1,6 @@
-"""Ten scikit-learn models on two course datasets, behind one Pipeline each.
+"""stockout — Retail Sales and Product Demand Prediction.
+
+Predicts store-day sales, and classifies each store-day as Low, Medium or High demand.
 
     from stockout.datasets import SALARY
     from stockout.evaluate import compare

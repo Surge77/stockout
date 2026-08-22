@@ -1,0 +1,132 @@
+/* One stylesheet, no framework. The app is six pages of forms and tables, and a CSS
+   framework would be a build step and a dependency to keep pinned for that. */
+
+:root {
+  --ink: #1a1c1e;
+  --muted: #5c6470;
+  --line: #dde1e6;
+  --page: #f6f7f9;
+  --card: #ffffff;
+  --accent: #1f6f54;
+  --accent-soft: #e8f3ee;
+  --warn: #b03a2e;
+  --warn-soft: #fbeae7;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+
+h1 { font-size: 1.6rem; margin: 0 0 .35rem; }
+h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
+h3 { font-size: .95rem; margin: 1.25rem 0 .5rem; color: var(--muted); }
+
+.lede { color: var(--muted); margin: 0 0 1.5rem; max-width: 60ch; }
+.hint { color: var(--muted); font-size: .86rem; margin: .6rem 0 0; }
+.mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .84rem; }
+
+/* --- header ------------------------------------------------------------------ */
+
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+  background: var(--card); border-bottom: 1px solid var(--line);
+  padding: .75rem 1.25rem;
+}
+.brand { font-weight: 700; text-decoration: none; color: var(--ink); letter-spacing: -.02em; }
+.bar nav { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.bar a { color: var(--muted); text-decoration: none; }
+.bar a:hover { color: var(--accent); }
+.who { color: var(--muted); font-size: .86rem; }
+.tag {
+  background: var(--accent-soft); color: var(--accent);
+  border-radius: 4px; padding: .05rem .35rem; font-size: .72rem; text-transform: uppercase;
+}
+
+/* --- layout ------------------------------------------------------------------ */
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
+
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem;
+}
+.card.narrow { max-width: 26rem; }
+.scroll { overflow-x: auto; }
+
+footer {
+  max-width: 1040px; margin: 0 auto; padding: 0 1rem 2rem;
+  color: var(--muted); font-size: .82rem;
+}
+
+/* --- forms ------------------------------------------------------------------- */
+
+label { display: block; margin-bottom: .85rem; font-weight: 600; font-size: .88rem; }
+label.check { font-weight: 400; display: flex; align-items: center; gap: .5rem; }
+
+input, select {
+  width: 100%; margin-top: .3rem; padding: .5rem .6rem;
+  border: 1px solid var(--line); border-radius: 6px;
+  font: inherit; background: #fff; color: var(--ink);
+}
+label.check input { width: auto; margin: 0; }
+
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: .9rem; margin: 0 0 1rem; }
+legend { font-size: .8rem; color: var(--muted); padding: 0 .4rem; text-transform: uppercase; }
+
+button, .button {
+  display: inline-block; border: 0; border-radius: 6px;
+  background: var(--accent); color: #fff;
+  padding: .55rem 1rem; font: inherit; font-weight: 600;
+  cursor: pointer; text-decoration: none;
+}
+button:hover, .button:hover { filter: brightness(1.08); }
+button.link { background: none; color: var(--muted); padding: 0; font-weight: 400; }
+button.link:hover { color: var(--accent); filter: none; }
+form.inline { display: inline-flex; gap: .35rem; align-items: center; margin: 0; }
+form.inline select { width: auto; margin: 0; }
+
+/* --- the two answers --------------------------------------------------------- */
+
+.answer {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+  border: 1px solid var(--line); border-left: 4px solid var(--muted);
+  border-radius: 8px; padding: .85rem 1rem; margin-bottom: .75rem;
+}
+.answer .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
+.answer .value { font-size: 1.7rem; font-weight: 700; letter-spacing: -.02em; }
+.answer.regression { border-left-color: #2c6fa8; }
+.answer.classification { border-left-color: var(--accent); }
+.answer.class-low { border-left-color: #8a8f98; }
+.answer.class-medium { border-left-color: #c9922e; }
+.answer.class-high { border-left-color: var(--warn); }
+
+/* --- tables ------------------------------------------------------------------ */
+
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; }
+caption { caption-side: top; text-align: left; color: var(--muted); font-size: .8rem; padding-bottom: .4rem; }
+
+.kv th { width: 40%; }
+.results thead th { border-bottom: 2px solid var(--line); white-space: nowrap; }
+.results td.metric { font-weight: 700; color: var(--accent); }
+.results tr.inactive { opacity: .5; }
+.results td.actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.thresholds { margin-top: 1rem; }
+
+/* --- messages ---------------------------------------------------------------- */
+
+.alert { border-radius: 8px; padding: .7rem .9rem; margin: 0 0 1rem; font-size: .9rem; }
+.alert.error { background: var(--warn-soft); color: var(--warn); border: 1px solid #f0c8c1; }
+.alert.ok { background: var(--accent-soft); color: var(--accent); border: 1px solid #bfe0d2; }
+
+details summary { cursor: pointer; font-weight: 600; }

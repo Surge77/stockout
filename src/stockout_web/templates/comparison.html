@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Comparison — stockout{% endblock %}
+
+{% macro table(rows, metric, metric_label) %}
+<table class="results">
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th class="num">{{ metric_label }}</th>
+      <th class="num">Fit (s)</th>
+      <th>In the course material</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.model|replace('_', ' ') }}</td>
+      <td class="num">{{ '{:,.4f}'.format(row[metric]) }}</td>
+      <td class="num">{{ '{:,.2f}'.format(row.fit_seconds) }}</td>
+      <td>{% if row.taught == 'yes' %}yes{% else %}<span class="tag warn">no</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{% block content %}
+<h1>Every model, one split</h1>
+<p class="lede">
+  Each model is fitted on the same training rows of <strong>{{ dataset }}</strong> and
+  scored on the same held-out rows, so the only thing that differs between two rows of a
+  table below is the estimator.
+</p>
+
+<section class="card">
+  <h2>Regression — predicting sales</h2>
+  {{ table(regression_rows, 'r2', 'R² Score') }}
+  <p class="note">
+    Rows are in registry order, simplest first. A table sorted by score answers
+    <em>which won</em>; this order also answers <em>did the extra complexity pay</em>.
+  </p>
+</section>
+
+<section class="card">
+  <h2>Classification — predicting demand class</h2>
+  {{ table(classification_rows, 'accuracy', 'Accuracy') }}
+  <p class="note">
+    The floor is <strong>{{ floor }}</strong> — what a model scores by always guessing the
+    commonest class. Per-{{ 'store' }} terciles make the three classes near-equal by
+    construction, so anything at or below the floor has learnt nothing.
+  </p>
+</section>
+
+<section class="card">
+  <h2>As markdown</h2>
+  <p class="note">For pasting into an issue or the README.</p>
+  <pre class="scroll">{{ regression_markdown }}
+
+{{ classification_markdown }}</pre>
+</section>
+{% endblock %}

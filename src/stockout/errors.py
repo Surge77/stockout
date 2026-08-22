@@ -5,3 +5,7 @@ from __future__ import annotations
 
 class StockoutError(Exception):
     """Every error this package raises deliberately."""
+
+
+class SchemaError(StockoutError):
+    """A frame violated an assumption recorded in `stockout.data.schemas`."""
