@@ -1,83 +1,60 @@
 # Contributing
 
+## The one rule
+
+**Only concepts taught in `ML/Resource Files` and `ML/Personal Files` may be used.**
+
+That is the whole point of this repository as of `0.7.0`. The allowed list is in the
+README and is complete. Before opening a pull request, run the guard:
+
+```bash
+grep -rEho "from sklearn[a-zA-Z_.]* import [A-Za-z_, ]*" src/ \
+  | grep -vE "train_test_split|Pipeline|StandardScaler|PolynomialFeatures|LabelEncoder|LinearRegression|Ridge|Lasso|LogisticRegression|DecisionTreeClassifier|RandomForestClassifier|BaggingClassifier|KNeighborsClassifier|SVC|TfidfVectorizer|r2_score|mean_squared_error|accuracy_score"
+```
+
+It must print nothing. A change that adds `GridSearchCV`, `ColumnTransformer`,
+`cross_val_score` or a regressor twin will be closed regardless of how good it is — the
+previous six releases were exactly that, and removing them is what `0.7.0` was.
+
 ## Setup
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate          # Windows;  source .venv/bin/activate elsewhere
 pip install -e ".[dev,notebook]"
 ```
 
-Editable install on purpose: the tests import the package the way a user would, so there
-is no `sys.path` shim and no `pythonpath` setting to drift.
-
-## The three gates
-
-All three must pass before a pull request is opened. CI runs exactly these.
+## Before you push
 
 ```bash
-ruff check .                          # lint only — never `ruff format`, see ADR 0004
-pyright                               # type gate
-pytest --cov --cov-fail-under=90      # 98% today; the gate is deliberately lower
+ruff check .        # lint only — never `ruff format`
+pyright             # must be 0 errors
+
+python -m stockout compare --dataset salary --task regression
+python -m stockout compare --dataset loans --task classification
+python -m nbconvert --execute --to notebook --inplace notebooks/01_explore.ipynb
 ```
 
-## House rules
+There is no test suite. The commands above are the verification, and the notebook must
+execute top to bottom with no error output.
 
-- **300 lines per file.** Split by responsibility before exceeding it, don't after.
-- `from __future__ import annotations` at the top of every module.
-- Type hints on every signature, private helpers included.
-- Comments explain **why**, never what. A constant with a non-obvious value gets a
-  sentence about where it came from.
-- No new dependency for something twenty lines of standard library would do. The markdown
-  table in `evaluate/report.py` is hand-rolled rather than pulling in `tabulate`.
+## Style
 
-## Tests
+- Files stay under 300 lines. Split by responsibility before adding to a long one.
+- Type hints on every public signature.
+- `X_train` and `Y_test` keep their capitals — that is scikit-learn's convention and the
+  notebooks' own naming, and `ruff` is configured to allow it.
+- Comment *why*, not *what*. A comment explaining a hidden constraint earns its place; one
+  restating the line below it does not.
 
-- Mirror the module: `src/stockout/x.py` → `tests/test_x.py`. Flat directory.
-- Name the behaviour, not the function: `test_no_fold_trains_on_the_future`, not
-  `test_rolling_origin_2`.
-- **No network in unit tests.** A `conftest.py` autouse fixture replaces `socket.connect`,
-  so an accidental request fails loudly rather than passing on a machine with credentials.
-  Genuine network tests take `@pytest.mark.integration` and are excluded by default.
-- `filterwarnings = ["error"]`. If a warning needs silencing, add it to the list with a
-  written justification — never a bare `ignore`.
-- A test that cannot fail is worse than no test. `test_features_ignore_a_perturbed_final_target`
-  has a partner asserting the opposite case for exactly this reason; if you add a property
-  test, add its partner too.
+## Commits
 
-## Anything touching leakage
-
-Changes to `features/lags.py`, `features/build.py` or `split/rolling.py` need a test that
-**fails before the change and passes after**. These three modules are the reason the
-project exists, and a regression in them is invisible — it makes the numbers better.
-
-## Commits and branches
-
-Conventional Commits with the module as scope, lowercase imperative subject describing the
-behaviour change rather than the diff:
+Conventional commits: `<type>(<scope>): <description>`, where type is one of `feat`, `fix`,
+`docs`, `refactor`, `chore`, `perf`, `test`.
 
 ```
-feat(split): rolling-origin splitter that refuses a shuffled fold
-fix(metrics): scale MASE by the same window it is reported on
-test(lags): sentinel guard against a perturbed final target
-docs(adr): record why quantiles beat a mean plus a z-score
+feat(models): register the six taught classifiers
+fix(persistence): refuse an artefact written by an older version
+docs(readme): state which concepts the package is allowed to use
 ```
 
-Branches: `feature/<kebab-slug>`, `fix/<kebab-slug>`, `test/<kebab-slug>`. Never commit
-directly to `main`; everything lands through a pull request, merged with `--no-ff` so the
-diff record survives.
-
-## Decisions
-
-Anything with a real trade-off gets an ADR in `docs/decisions/`, numbered and kebab-cased,
-stating the situation, the choice, and **what it cost**. A decision with no downside listed
-is usually one that was not thought about hard enough.
-
-## Regenerating the sample
-
-```bash
-python scripts/make_sample.py
-```
-
-Only needed after changing `stockout.data.synth`. The generator is deterministic, so any
-other diff means something changed that should not have.
+Branch off `main` as `feature/<description>` or `fix/<description>`. Never commit to `main`
+directly.

@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "stockout: retail demand forecasting scored by the replenishment decision"
+title: "stockout: ten scikit-learn models on one preprocessing pipeline"
 message: "If you use this software, please cite it as below."
 type: software
 authors:
@@ -9,18 +9,18 @@ authors:
 repository-code: "https://github.com/Surge77/stockout"
 url: "https://github.com/Surge77/stockout"
 abstract: >-
-  A retail demand forecasting pipeline validated by rolling-origin backtesting, in which
-  temporal leakage is enforced by the test suite rather than by convention, and forecasts
-  are evaluated by the replenishment decision they drive rather than by percentage error
-  alone. The target service level is derived from the newsvendor critical ratio instead of
-  being tuned.
+  A teaching package that fits four regressors and six classifiers on two tabular
+  datasets, each behind the same StandardScaler pipeline, and compares them on one
+  held-out split so the estimator is the only thing that varies between rows of the
+  results table. Deliberately restricted to the scikit-learn surface covered by an
+  introductory course: train_test_split, Pipeline, StandardScaler, PolynomialFeatures,
+  the linear models, the tree and kernel classifiers, and three metrics.
 keywords:
-  - time-series
-  - forecasting
-  - demand-forecasting
-  - backtesting
-  - inventory
-  - retail
+  - scikit-learn
+  - regression
+  - classification
+  - pipeline
+  - teaching
 license: MIT
-version: 0.3.0
-date-released: "2026-08-16"
+version: 0.7.0
+date-released: "2026-08-22"

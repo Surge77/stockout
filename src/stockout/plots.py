@@ -1,51 +1,52 @@
-"""Figure styling and saving. No chart builders live here.
-
-The split is deliberate and matches the rest of the repo: anything with one correct
-answer is in the package and tested; the charts themselves are analytical choices and
-belong in the notebook, next to the reasoning that produced them.
-"""
+"""Matplotlib and seaborn charts for the notebook. Nothing here is called by the CLI."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from .config import REPORTS_DIR
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from matplotlib.figure import Figure
 
-#: Matplotlib rc overrides. Muted, legible at the size GitHub renders a PNG in a README,
-#: and free of the default blue that says "nobody touched this".
-STYLE: dict[str, Any] = {
-    "figure.figsize": (9, 5),
-    "figure.dpi": 120,
-    "savefig.dpi": 150,
-    "savefig.bbox": "tight",
-    "axes.grid": True,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "grid.alpha": 0.25,
-    "grid.linestyle": "-",
-    "font.size": 10,
-    "axes.titlesize": 12,
-    "axes.titleweight": "bold",
-    "legend.frameon": False,
-}
+FIGURE_SIZE = (9, 6)
 
 
-def apply_style() -> None:
-    """Install the house style into the active matplotlib session."""
-    import matplotlib.pyplot as plt
+def correlation_heatmap(frame: pd.DataFrame, *, title: str = "Correlation") -> Figure:
+    """Every column against every other. All columns here are numeric, so this is total."""
+    figure, axes = plt.subplots(figsize=FIGURE_SIZE)
+    sns.heatmap(frame.corr(), annot=True, fmt=".2f", cmap="viridis", ax=axes)
+    axes.set_title(title)
+    figure.tight_layout()
+    return figure
 
-    plt.rcParams.update(STYLE)
+
+def predicted_against_actual(
+    y_true: pd.Series, y_pred: pd.Series, *, title: str = "Predicted against actual"
+) -> Figure:
+    """The regression diagnostic: points on the diagonal are exact."""
+    figure, axes = plt.subplots(figsize=FIGURE_SIZE)
+    sns.scatterplot(x=y_true, y=y_pred, s=12, alpha=0.4, ax=axes)
+    limits = [min(y_true.min(), min(y_pred)), max(y_true.max(), max(y_pred))]
+    axes.plot(limits, limits, color="crimson", linewidth=1)
+    axes.set_xlabel("actual")
+    axes.set_ylabel("predicted")
+    axes.set_title(title)
+    figure.tight_layout()
+    return figure
 
 
-def save(fig: Any, name: str, *, directory: Path | None = None) -> Path:
-    """Write `fig` to `reports/<name>.png` and return the path.
+def scores_bar(results: pd.DataFrame, *, metric: str, title: str = "") -> Figure:
+    """The comparison table as a chart, keeping the table's simplest-first order."""
+    figure, axes = plt.subplots(figsize=FIGURE_SIZE)
+    sns.barplot(data=results, x="model", y=metric, ax=axes, hue="model", legend=False)
+    axes.set_title(title or f"{metric} by model")
+    axes.tick_params(axis="x", rotation=30)
+    figure.tight_layout()
+    return figure
 
-    `reports/` is gitignored: every chart must be reproducible from the notebook, so
-    committing one would only create a stale artefact nobody notices is stale.
-    """
-    target = (directory or REPORTS_DIR)
-    target.mkdir(parents=True, exist_ok=True)
-    path = target / f"{name}.png"
-    fig.savefig(path)
+
+def save(figure: Figure, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=150)
     return path

@@ -1,27 +1,21 @@
-"""Retail demand forecasting scored by the decision it drives.
+"""Ten scikit-learn models on two course datasets, behind one Pipeline each.
 
-    from stockout.data.synth import make_sales
-    from stockout.evaluate.backtest import backtest
-    from stockout.models.baselines import SeasonalNaive
+    from stockout.datasets import SALARY
+    from stockout.evaluate import compare
 
-    frame = make_sales(n_stores=8, days=730)
-    results = backtest(frame, SeasonalNaive, n_folds=5, horizon=42)
+    print(compare(SALARY, "regression"))
 
-Submodules are deliberately not imported here. Importing the package should not
-pull in matplotlib or kaggle; `stockout describe` has no business opening a
-plotting backend.
+Submodules are deliberately not imported here. Importing the package should not pull in
+matplotlib; `stockout describe` has no business opening a plotting backend.
 """
 
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-# Read from the installed distribution rather than typed here. Hand-maintained twice, this
-# said 0.1.0 while pyproject said 0.3.0 through two releases — the failure is silent,
-# because nothing imports a version to check that it is wrong. One source now.
 try:
     __version__ = version("stockout")
-except PackageNotFoundError:  # pragma: no cover - a source tree on PYTHONPATH, not installed
+except PackageNotFoundError:  # pragma: no cover - a source tree, not an install
     __version__ = "0.0.0+unknown"
 
 __all__ = ["__version__"]

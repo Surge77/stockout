@@ -4,23 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockout"
-version = "0.6.0"
-description = "Retail sales regression and demand classification on Rossmann, with the cost of a shuffled split measured rather than asserted."
+version = "0.7.0"
+description = "Ten scikit-learn models on two course datasets, behind one Pipeline each, scored on one held-out split."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "TEJAS", email = "tejasdeshmane66@gmail.com" }]
-keywords = [
-    "time-series",
-    "regression",
-    "classification",
-    "scikit-learn",
-    "demand-forecasting",
-    "retail",
-]
+keywords = ["regression", "classification", "scikit-learn", "pipeline", "teaching"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,56 +23,24 @@ classifiers = [
 # Pinned exactly. A portfolio repo that cannot be reproduced two years from now is
 # not evidence of anything.
 #
-# kaggle is a runtime dependency rather than an extra because `stockout fetch` is a
-# first-class command, not an optional convenience. It is the only dependency that
-# ever opens a socket, and nothing under tests/ is allowed to reach it.
-#
-# scikit-learn is a runtime dependency, not an extra. Every model in the package is
-# one, so a `pip install -e .` that cannot fit anything would install a CLI with no
-# verbs. LightGBM used to sit behind a `gbm` extra for exactly the opposite reason and
-# has been removed — ADR 0018.
+# seaborn is a runtime dependency rather than a notebook extra because `plots.py`
+# imports it. The two xlsx source files were converted to csv once with the standard
+# library, so openpyxl is deliberately absent.
 dependencies = [
     "pandas==2.2.3",
     "numpy==2.4.3",
     "matplotlib==3.10.8",
+    "seaborn==0.13.2",
     "scikit-learn==1.9.0",
     "joblib==1.5.3",
-    "pyarrow==25.0.1",
-    "kaggle==2.2.4",
-    "python-dotenv==1.2.2",
 ]
 
 [project.optional-dependencies]
-# seaborn is notebook-only: it styles exploratory charts and nothing in src/ imports it.
-notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0", "seaborn==0.13.2"]
-
-# The web app is an extra because the package's core is a library and a CLI: nothing in
-# `src/stockout/` imports FastAPI, and `pip install -e .` should not pull a web server for
-# somebody who wants the models. This is not ADR 0018's trap in reverse — that was about a
-# *model* hiding behind an extra, where here the extra is a genuinely separate delivery.
-web = [
-    "fastapi==0.141.1",
-    "uvicorn[standard]==0.52.3",
-    "jinja2==3.1.6",
-    # FastAPI parses HTML form posts through this; without it `Form(...)` raises at import.
-    "python-multipart==0.0.32",
-    # The hashing itself, not passlib: one dependency instead of two, and the algorithm is
-    # the thing being chosen here rather than a plugin registry over it.
-    "bcrypt==5.0.0",
-    # Signs the session cookie. Starlette's SessionMiddleware requires it.
-    "itsdangerous==2.2.0",
-]
+notebook = ["jupyterlab==4.2.5", "ipykernel==7.3.0", "nbconvert==7.16.4"]
 dev = [
-    "pytest==9.0.3",
-    "pytest-cov==7.1.0",
     "ruff==0.16.3",
     "pyright==1.1.411",
     "pandas-stubs==3.0.5.260730",
-    "hypothesis==6.165.6",
-    # Drives FastAPI's TestClient: no live server, no port, no sleep. `httpx2`
-    # rather than `httpx`, because Starlette 1.6 raises a deprecation warning on
-    # the latter and `filterwarnings = ["error"]` turns that into a failed import.
-    "httpx2==2.12.0",
 ]
 
 [project.urls]
@@ -96,38 +57,11 @@ where = ["src"]
 [tool.setuptools.package-data]
 stockout = ["py.typed"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-# Integration tests reach Kaggle, which needs credentials and competition-rule
-# acceptance. Excluded by default so a fresh clone is green offline.
-addopts = "-q -m 'not integration'"
-markers = [
-    "integration: downloads the real Rossmann archive from Kaggle (needs network + kaggle.json)",
-]
-filterwarnings = ["error"]
-
-[tool.coverage.run]
-branch = true
-# Both packages. `stockout_web` carries the auth code, which project rules hold to 100%,
-# and a source list that omits it would report a green number for code nothing measured.
-source = ["stockout", "stockout_web"]
-omit = ["*/__main__.py", "*/tests/*"]
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-exclude_lines = [
-    "pragma: no cover",
-    "if __name__ == .__main__.:",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-]
-
 [tool.pyright]
 # Point at the in-repo virtualenv so the editor and the CLI resolve the same pandas.
 venvPath = "."
 venv = ".venv"
-include = ["src", "tests", "scripts"]
+include = ["src"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 reportMissingImports = true
@@ -138,6 +72,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "C4", "RUF"]
+# X_train / Y_test are the notebooks' own names, and capital X for a feature matrix is
+# the scikit-learn convention throughout its own documentation. Renaming them to satisfy
+# pep8 would make every function here read differently from the material it mirrors.
+ignore = ["N803", "N806"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["stockout"]

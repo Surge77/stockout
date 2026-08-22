@@ -7,22 +7,94 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Planned
 
-- The **loan classification task**: `Loan_Regression_Classification.xlsx` carries both
-  `Loan_Approved` (binary) and `Loan_Amount` (continuous, and zero exactly when
-  `Loan_Approved` is 0), which is a paired classification-then-regression problem this
-  package's machinery can already answer and has not been pointed at
-- Answers to the five questions on **real** data. They are answered on the generator now,
-  and three of the five came out flat or negative for reasons that are properties of the
-  generator rather than of retail. This needs a Kaggle account and an accepted set of
-  competition rules rather than any code
-- Feeding the searched hyperparameters back into the registry. `tune` prints what it
-  found; `linear.py` still says `alpha=1.0`, so a reader has to run the search to learn
-  that the literal is not the searched answer. ADR 0017
-- A hierarchical or per-store model. Every scikit-learn model here is one global fit with
-  `store` as a feature, which pools incidentally and shares nothing deliberately — and Q2
-  cannot test whether that is the right call on four stores
-- Something to replace the decision layer ADR 0014 removed. Accuracy is not what a
-  replenishment decision is graded on, and nothing here now says what a forecast costs
+- Nothing. `0.7.0` set the scope to the course material, and the previous entries under
+  this heading proposed work that would have left it again.
+
+## [0.7.0] — 2026-08-22
+
+**Stripped to the taught curriculum.** Every concept that does not appear in the course
+notebooks under `ML/Resource Files` and `ML/Personal Files` was removed, and the package
+retargeted at the course's own datasets. Source went from 6,765 lines to about 800.
+
+The taught surface was established by parsing the *code cells* of all fourteen notebooks —
+`ColumnTransformer` appears 110 times in those files and zero times in code, because
+scikit-learn's HTML representation of a fitted `Pipeline` names estimator classes in cell
+output that the code never imported.
+
+### Removed
+
+- **The time-series machinery.** Rolling-origin backtesting (`split/rolling.py`), the split
+  comparison (`split/strategies.py`), the four-arm leakage experiment
+  (`evaluate/leakage.py`), lag and rolling features (`features/lags.py`), the feature
+  denylist (`features/build.py`), calendar and store features. None of `TimeSeriesSplit`,
+  `GridSearchCV` or `cross_val_score` is taught; the only split in the course material is
+  `train_test_split`.
+- **The `ColumnTransformer` preprocessor** (`features/preprocess.py`, 224 lines) along with
+  `SimpleImputer`, `OneHotEncoder`, `FunctionTransformer` and `TransformedTargetRegressor`.
+  Both new datasets are entirely numeric, so preprocessing is a `StandardScaler` inside a
+  `Pipeline` — which is what `Task_Regression.pdf` does.
+- **Eleven models.** `ElasticNet`, `HistGradientBoostingRegressor` and
+  `HistGradientBoostingClassifier`, `LinearSVC`, `DummyRegressor`, `DummyClassifier`, the
+  per-store baselines, and the regressor twins `DecisionTreeRegressor`,
+  `RandomForestRegressor`, `BaggingRegressor`, `KNeighborsRegressor`, `SVR`. The course
+  teaches trees, forests, bagging, KNN and SVM as classifiers only.
+- **The hyperparameter search** — `models/grids.py` and `models/tuning.py`. The alphas now
+  come from the assignment instead: `Ridge(alpha=1)`, `Lasso(alpha=100)`.
+- **`src/stockout_web/`** — FastAPI, bcrypt, SQLite, signed session cookies, the admin and
+  user pages, and the `[web]` extra. Roughly 1,100 lines with no ML concept in them. Step 5
+  of the assignment serves a prediction from `input()` prompts, and
+  `stockout predict --interactive` is now that.
+- **The Rossmann data path** — the Kaggle downloader, both synthetic generators, the schema
+  and validation modules, the committed sample csvs, `scripts/make_sample.py` and
+  `.env.example`. With `kaggle` and `python-dotenv` gone nothing in the package opens a
+  socket.
+- **The metrics that are not taught** — WMAPE, RMSPE, MASE, MAE, macro-F1, the confusion
+  matrix and the classification report. What remains is `r2_score`,
+  `mean_squared_error` and `accuracy_score`.
+- **`targets.py`** — per-store tercile thresholds and the Low/Medium/High demand classes.
+  The classification target is now `Loan_Approved`, which is already binary.
+- **The test suite** (39 files, 4,750 lines), all 21 ADRs, `docs/`, `MODEL_CARD.md`, both CI
+  workflows and the coverage gates. Verification is now running the CLI and executing the
+  notebook; this is a real reduction in safety and is recorded rather than glossed.
+
+### Added
+
+- **`data/salary.csv`** — 10,000 rows from `Task_R.xlsx`, the assignment's own dataset. Its
+  ten feature columns are exactly the ten `input()` prompts on the PDF's last page.
+- **`data/loans.csv`** — 10,000 rows from `Loan_Regression_Classification.xlsx`, carrying
+  `Loan_Approved` for classification and `Loan_Amount` for regression. This is the paired
+  classification-then-regression problem earlier releases listed as planned and never did.
+- Both were converted from xlsx to csv **once, with the standard library** (`zipfile` plus
+  `xml.etree`), so reading them adds no `openpyxl` dependency. Both are committed, so a
+  fresh clone runs offline.
+- **`stockout models`** — prints what `--model` accepts for each task.
+- **`stockout predict --interactive`** — the assignment's `input()` step, and
+  `--set NAME=VALUE` for the same thing without a human.
+- **`--dataset` on every data command**, because there are now two.
+
+### Changed
+
+- **The package is ten flat modules**, no subpackages. `features/`, `split/`, `evaluate/`,
+  `models/` and `data/` were directories; `evaluate.py`, `models.py` and `datasets.py` are
+  files.
+- **`compare` is one split, not five folds.** Every registered model is fitted on the same
+  training rows and scored on the same test rows, so the only thing differing between two
+  rows of the table is still the estimator.
+- **`ModelSpec` lost `drop_first` and `sample_rows`**, which existed for one-hot encoding
+  and for subsampling the kernel models. Neither applies now.
+- **The artefact carries the dataset, task, target and feature order** and is version 2.
+  Version 1 files are refused rather than half-read.
+- **`Artifact.provenance()` is ASCII.** It is printed by notebook kernels as well as by the
+  CLI, and a Windows kernel's cp1252 stdout replaced the middle dot with a question mark.
+- **`notebooks/01_explore.ipynb`** rebuilt: the assignment's 17 steps in order, then both
+  comparison tables, then the `input()` cell. It falls back to a fixed candidate when
+  stdin is not a terminal, so it can be executed end to end without a human.
+- **`ruff` ignores `N803` and `N806`.** `X_train` and `Y_test` are the notebooks' own names
+  and capital `X` for a feature matrix is scikit-learn's own convention; renaming them
+  would make every function here read differently from the material it mirrors.
+- Runtime dependencies are pandas, numpy, matplotlib, seaborn, scikit-learn and joblib.
+  `pyarrow`, `kaggle` and `python-dotenv` are gone; `seaborn` moved from the notebook extra
+  into the runtime set because `plots.py` imports it.
 
 ## [0.6.0] — 2026-08-18
 
