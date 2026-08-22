@@ -1,4 +1,4 @@
-"""The ten taught estimators, each wrapped in the Pipeline shape the notebooks use.
+"""The registered estimators, each wrapped in the Pipeline shape the notebooks use.
 
 Every model is `Pipeline([("Scaler", StandardScaler()), ("Model", estimator)])`. Scaling
 is a no-op for the tree models and is applied to them anyway, because one pattern is
@@ -7,6 +7,13 @@ easier to read than two and the cost is nil.
 The regression hyperparameters are the assignment's, not invented here:
 `Ridge(alpha=1)` and `Lasso(alpha=100)` are the values on pages 4 and 3 of
 `Task_Regression.pdf`, and `PolynomialFeatures(degree=2)` is page 2.
+
+**Three regressors here are outside the course material and are marked as such in
+the registry.** `RandomForestRegressor` is the regression form of a classifier the
+notebooks do teach; `GradientBoostingRegressor` and `VotingRegressor` appear in no
+notebook in any form. They were added by request after 0.7.0 removed the untaught
+models, so the exception is recorded rather than quietly folded in — see the
+`taught` field below and the note in README.
 """
 
 from __future__ import annotations
@@ -15,7 +22,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from sklearn.ensemble import BaggingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    BaggingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+    VotingRegressor,
+)
 from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
@@ -33,6 +46,11 @@ POLYNOMIAL_DEGREE = 2
 #: features here and it warns rather than failing. Raised until it converges quietly.
 LOGISTIC_MAX_ITER = 1_000
 
+#: The three estimators `voting` averages. Deliberately unalike — a vote between three
+#: linear models would be a linear model with extra steps. Each is already registered
+#: here on its own, so the table shows what the ensemble was built from.
+VOTING_MEMBERS = ("linear", "random_forest", "gradient_boosting")
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -44,6 +62,13 @@ class ModelSpec:
     """Given a random seed, return an unfitted pipeline. Called once per run."""
 
     note: str = ""
+
+    taught: bool = True
+    """Whether this estimator appears in the course notebooks.
+
+    False for the three regressors added after 0.7.0. Printed in the comparison table,
+    because a reader comparing a taught model against an untaught one should be told
+    which is which rather than having to know."""
 
 
 def _pipeline(estimator: Any) -> Pipeline:
@@ -69,6 +94,26 @@ def _polynomial(seed: int) -> Pipeline:
             ("Scaler", StandardScaler()),
             ("Model", LinearRegression()),
         ]
+    )
+
+
+def _random_forest_regressor(seed: int) -> Pipeline:
+    return _pipeline(RandomForestRegressor(random_state=seed))
+
+
+def _gradient_boosting(seed: int) -> Pipeline:
+    return _pipeline(GradientBoostingRegressor(random_state=seed))
+
+
+def _voting(seed: int) -> Pipeline:
+    return _pipeline(
+        VotingRegressor(
+            [
+                ("linear", LinearRegression()),
+                ("random_forest", RandomForestRegressor(random_state=seed)),
+                ("gradient_boosting", GradientBoostingRegressor(random_state=seed)),
+            ]
+        )
     )
 
 
@@ -103,6 +148,19 @@ REGRESSORS: tuple[ModelSpec, ...] = (
     ModelSpec("ridge", "regression", _ridge, f"L2, alpha={RIDGE_ALPHA:g}"),
     ModelSpec("lasso", "regression", _lasso, f"L1, alpha={LASSO_ALPHA:g}"),
     ModelSpec("polynomial", "regression", _polynomial, f"degree {POLYNOMIAL_DEGREE}"),
+    ModelSpec(
+        "random_forest", "regression", _random_forest_regressor, "100 trees", taught=False
+    ),
+    ModelSpec(
+        "gradient_boosting", "regression", _gradient_boosting, "100 stages", taught=False
+    ),
+    ModelSpec(
+        "voting",
+        "regression",
+        _voting,
+        f"averages {', '.join(VOTING_MEMBERS)}",
+        taught=False,
+    ),
 )
 
 CLASSIFIERS: tuple[ModelSpec, ...] = (

@@ -13,7 +13,7 @@ from .datasets import dataset_for, describe, load
 from .evaluate import compare, to_markdown
 from .persistence import load as load_artifact
 from .predict import describe_prediction, parse_assignments, predict, prompt_for
-from .registry import model_names
+from .registry import specs_for
 from .train import train
 
 #: What `train` fits when `--model` is not given. Lasso is the model the assignment
@@ -74,7 +74,10 @@ def run_predict(args: argparse.Namespace) -> int:
 
 def run_models(args: argparse.Namespace) -> int:
     for task in ("regression", "classification"):
-        print(f"{task}: {', '.join(model_names(task))}")
+        print(f"{task}:")
+        for spec in specs_for(task):
+            mark = "" if spec.taught else "   (not in the course material)"
+            print(f"  {spec.name:<18} {spec.note}{mark}")
     return 0
 
 

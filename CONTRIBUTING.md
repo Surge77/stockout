@@ -2,19 +2,26 @@
 
 ## The one rule
 
-**Only concepts taught in `ML/Resource Files` and `ML/Personal Files` may be used.**
+**Only concepts taught in `ML/Resource Files` and `ML/Personal Files` may be used, plus
+the three documented exceptions.**
 
-That is the whole point of this repository as of `0.7.0`. The allowed list is in the
-README and is complete. Before opening a pull request, run the guard:
+That is the whole point of this repository as of `0.7.0`. The allowed list lives in
+`scripts/check_taught.py` and is mirrored in the README. Before opening a pull request:
 
 ```bash
-grep -rEho "from sklearn[a-zA-Z_.]* import [A-Za-z_, ]*" src/ \
-  | grep -vE "train_test_split|Pipeline|StandardScaler|PolynomialFeatures|LabelEncoder|LinearRegression|Ridge|Lasso|LogisticRegression|DecisionTreeClassifier|RandomForestClassifier|BaggingClassifier|KNeighborsClassifier|SVC|TfidfVectorizer|r2_score|mean_squared_error|accuracy_score"
+python scripts/check_taught.py
 ```
 
-It must print nothing. A change that adds `GridSearchCV`, `ColumnTransformer`,
-`cross_val_score` or a regressor twin will be closed regardless of how good it is — the
-previous six releases were exactly that, and removing them is what `0.7.0` was.
+It must exit 0. `RandomForestRegressor`, `GradientBoostingRegressor` and `VotingRegressor`
+are the three exceptions, added in `0.8.0` by request; they carry `taught=False` in the
+registry and every table says so. `--strict` rejects those three as well and is the way to
+see the current exception list.
+
+A change that adds a **fourth** untaught estimator — `GridSearchCV`, `ColumnTransformer`,
+`cross_val_score`, `AdaBoost`, another regressor twin — needs the same treatment: an entry
+in the README's exceptions table, `taught=False` on its `ModelSpec`, and an entry in
+`EXCEPTIONS` in `scripts/check_taught.py`. Adding one silently is the thing `0.7.0` existed
+to undo.
 
 ## Setup
 
@@ -25,11 +32,13 @@ pip install -e ".[dev,notebook]"
 ## Before you push
 
 ```bash
-ruff check .        # lint only — never `ruff format`
-pyright             # must be 0 errors
+ruff check .                     # lint only — never `ruff format`
+pyright                          # must be 0 errors
+python scripts/check_taught.py   # no undocumented sklearn import
 
 python -m stockout compare --dataset salary --task regression
 python -m stockout compare --dataset loans --task classification
+python -m stockout compare --dataset loans --task regression
 python -m nbconvert --execute --to notebook --inplace notebooks/01_explore.ipynb
 ```
 

@@ -7,8 +7,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Planned
 
-- Nothing. `0.7.0` set the scope to the course material, and the previous entries under
-  this heading proposed work that would have left it again.
+- Nothing.
+
+## [0.8.0] — 2026-08-22
+
+Three regressors added back by request, one release after `0.7.0` removed everything
+outside the course material. **They are the only untaught code in the package**, and
+rather than fold them in quietly the release makes the exception visible everywhere it
+could matter.
+
+### Added
+
+- **`random_forest` (regression)** — `RandomForestRegressor`. The regression form of
+  `RandomForestClassifier`, which `DT.ipynb` does teach. `0.7.0` dropped every regressor
+  twin under the strict reading; this is the one that came back.
+- **`gradient_boosting`** — `GradientBoostingRegressor`. Appears in no notebook in any
+  form. `0.7.0` removed `HistGradientBoostingRegressor` for exactly this reason.
+- **`voting`** — `VotingRegressor` averaging `LinearRegression`, `RandomForestRegressor`
+  and `GradientBoostingRegressor`. Deliberately unalike members: a vote between three
+  linear models is a linear model with extra steps. Appears in no notebook;
+  `BaggingClassifier` is the nearest taught idea, and it combines resamples of one
+  estimator rather than several different ones.
+- **`ModelSpec.taught`** — a boolean on every registry entry. `stockout models` prints
+  `(not in the course material)` beside the three, and every comparison table gains a
+  `taught` column. A reader comparing a taught model against an untaught one is told
+  which is which instead of having to know.
+
+### Changed
+
+- The regression registry is seven models, up from four. Classification is unchanged at
+  six: the request was for regressors, and no untaught classifier was added.
+- **The strictness guard is now `scripts/check_taught.py`, not a `grep`.** Adding a third
+  model pushed `from sklearn.ensemble import` onto its own line, and the grep matched an
+  empty tail and passed while hiding every name in the brackets — a check that silently
+  succeeds is worse than none. The script parses the AST, so formatting cannot fool it.
+  `--strict` rejects the three exceptions too and prints the current exception list.
+- README gains an exceptions table and states plainly that ten of thirteen models are
+  taught. CONTRIBUTING's one rule now names the exceptions and says what adding a fourth
+  requires.
+- `models.py` module docstring records why the three are present.
+
+### Results
+
+On **salary** the three untaught models lose. `polynomial` scores r² 0.9941 against
+`gradient_boosting`'s 0.9909 and fits in 0.033s against 1.05s. Salary is close to a smooth
+function of its ten inputs and a degree-2 expansion captures that better than trees do.
+
+On **`Loan_Amount`** they win, and by a wide margin: `random_forest` reaches r² 0.9371
+where `polynomial` manages 0.8545 and the plain linear models 0.6897. The amount is
+exactly zero whenever the loan was refused, so the surface has a kink — a straight line
+cannot follow it, a quadratic partly can, and a forest splits rather than fitting a curve.
+
+Two datasets, opposite verdicts on whether the extra complexity paid. That is the argument
+for keeping the `taught` column visible rather than only sorting by score.
+
+### Note
+
+`0.7.0`'s claim that every concept in the package appears in the course notebooks is no
+longer true, and the README no longer makes it. What replaced it is a narrower claim that
+can still be checked mechanically: ten of the thirteen models are taught, the other three
+are named, and nothing else untaught is imported anywhere in `src/`.
 
 ## [0.7.0] — 2026-08-22
 

@@ -4,9 +4,10 @@
 [![License: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
 [![Checked with pyright](https://img.shields.io/badge/types-pyright-blue)](https://github.com/microsoft/pyright)
 
-Ten scikit-learn models on two datasets, each behind the same `Pipeline`, compared in one
-table. Every concept in this package appears in the course notebooks under
-`ML/Resource Files` — and nothing else does.
+Thirteen scikit-learn models on two datasets, each behind the same `Pipeline`, compared
+in one table. Ten of them come from the course notebooks under `ML/Resource Files`; the
+other three are named as exceptions below and flagged in every table this package
+prints.
 
 > **The name is historical.** Up to `v0.6.0` this was a retail demand forecaster on the
 > Rossmann store-sales data, with rolling-origin backtesting, lag features, leakage guards
@@ -18,16 +19,16 @@ pip install -e .
 
 python -m stockout describe --dataset salary              # rows, dtypes, nulls, summary
 python -m stockout models                                 # what --model accepts
-python -m stockout compare --dataset salary               # the four regressors
+python -m stockout compare --dataset salary               # the seven regressors
 python -m stockout compare --dataset loans --task classification   # the six classifiers
 python -m stockout train --dataset salary --model lasso   # fit and save
 python -m stockout predict --interactive                  # prompt, then predict
 ```
 
-## The concepts this package is allowed to use
+## The concepts this package uses
 
 Taken from the code cells of the fourteen notebooks in `ML/Resource Files` and
-`ML/Personal Files`, plus `Task_Regression.pdf`. This is the complete list.
+`ML/Personal Files`, plus `Task_Regression.pdf`.
 
 | Area | Used here |
 |---|---|
@@ -42,17 +43,34 @@ Taken from the code cells of the fourteen notebooks in `ML/Resource Files` and
 
 `LabelEncoder` and `TfidfVectorizer` are taught and are deliberately **not** used: every
 column in both datasets is numeric, so there is no categorical column to encode and no text
-column to vectorise. Inventing one to justify the import would be the same
-over-engineering this release exists to remove.
+column to vectorise. Inventing one to justify the import would be over-engineering.
 
-Nothing outside that table is imported anywhere in `src/`. To check:
+### The three exceptions
+
+`0.7.0` removed every estimator outside that table. `0.8.0` added three back, by request,
+and they are the only untaught code in the package:
+
+| Estimator | Status in the course material |
+|---|---|
+| `RandomForestRegressor` | the regression form of `RandomForestClassifier`, which `DT.ipynb` teaches |
+| `GradientBoostingRegressor` | appears in no notebook in any form |
+| `VotingRegressor` | appears in no notebook; `BaggingClassifier` is the nearest taught idea |
+
+They carry `taught=False` in the registry, `stockout models` marks them, and the `taught`
+column of every comparison table says which is which. Nothing else in `src/` is untaught:
 
 ```bash
-grep -rEho "from sklearn[a-zA-Z_.]* import [A-Za-z_, ]*" src/ \
-  | grep -vE "train_test_split|Pipeline|StandardScaler|PolynomialFeatures|LabelEncoder|LinearRegression|Ridge|Lasso|LogisticRegression|DecisionTreeClassifier|RandomForestClassifier|BaggingClassifier|KNeighborsClassifier|SVC|TfidfVectorizer|r2_score|mean_squared_error|accuracy_score"
+python scripts/check_taught.py            # taught set + the three exceptions
+python scripts/check_taught.py --strict    # taught set only
 ```
 
-That prints nothing.
+The first exits 0. The second exits 1 and names exactly those three, which is the check
+worth keeping: it fails loudly the moment a fourth appears.
+
+It parses the AST rather than grepping. A `grep` cannot see a parenthesised multi-line
+import — with `from sklearn.ensemble import (` alone on a line the pattern matches an empty
+tail and the check passes while hiding every name in the brackets. That is exactly what
+happened when `0.8.0` added the third model, which is why the guard is a script.
 
 ## The data
 
@@ -92,19 +110,29 @@ The regression hyperparameters are the assignment's, not invented here.
 | regression | `ridge` | `Ridge(alpha=1)` | PDF p.4 |
 | regression | `lasso` | `Lasso(alpha=100)` | PDF p.3 |
 | regression | `polynomial` | `PolynomialFeatures(degree=2)` → scaler → `LinearRegression()` | PDF p.2 |
+| regression | `random_forest` | `RandomForestRegressor()` | **not taught** |
+| regression | `gradient_boosting` | `GradientBoostingRegressor()` | **not taught** |
+| regression | `voting` | `VotingRegressor([linear, random_forest, gradient_boosting])` | **not taught** |
 | classification | `logistic` | `LogisticRegression(max_iter=1000)` | `LR.ipynb` |
 | classification | `knn` | `KNeighborsClassifier()` | `7. KNN.ipynb` |
 | classification | `decision_tree` | `DecisionTreeClassifier()` | `DT.ipynb` |
-| classification | `random_forest` | `RandomForestClassifier()` | `SVM.ipynb` |
-| classification | `bagging` | `BaggingClassifier()` | `SVM.ipynb` |
+| classification | `random_forest` | `RandomForestClassifier()` | `DT.ipynb` |
+| classification | `bagging` | `BaggingClassifier()` | `DT.ipynb` |
 | classification | `svc` | `SVC()` | `SVM.ipynb` |
 
 The registry is in order of complexity, simplest first, and the results table keeps that
 order. A table sorted by score answers *which won*; this order also answers *did the extra
 complexity pay*.
 
-Only the classifier forms are here, because only the classifier forms are taught.
-There is no `DecisionTreeRegressor`, no `SVR`, no `KNeighborsRegressor`.
+**Each model predicts independently.** Fitting seven regressors produces seven separate
+estimators, and the same input row gets a different answer from each — on one candidate
+they span 73,567 to 76,690. `compare` shows all of them; `train --model X` commits to
+one; `predict` answers from that one. `voting` is the only model that combines others,
+and it does so internally, emitting a single number of its own.
+
+On the classification side only the classifier forms are registered, because only the
+classifier forms are taught: there is no `DecisionTreeRegressor`, no `SVR`, no
+`KNeighborsRegressor`.
 
 ## Results
 
@@ -115,14 +143,17 @@ rows of the table is the estimator.
 ```
 $ python -m stockout compare --dataset salary --task regression
 
-salary · regression -> salary · 4 models · 2,000 held-out rows
+salary · regression -> salary · 7 models · 2,000 held-out rows
 
-| model      | r2     | mse             | fit_seconds |
-|------------|--------|-----------------|-------------|
-| linear     | 0.9805 | 10,988,772.3710 | 0.2450      |
-| ridge      | 0.9805 | 10,988,812.1897 | 0.0040      |
-| lasso      | 0.9803 | 11,088,696.4602 | 0.0030      |
-| polynomial | 0.9941 | 3,347,614.8693  | 0.0280      |
+| model             | r2     | mse             | fit_seconds | taught |
+|-------------------|--------|-----------------|-------------|--------|
+| linear            | 0.9805 | 10,988,772.3710 | 0.0760      | yes    |
+| ridge             | 0.9805 | 10,988,812.1897 | 0.0100      | yes    |
+| lasso             | 0.9803 | 11,088,696.4602 | 0.0060      | yes    |
+| polynomial        | 0.9941 | 3,347,614.8693  | 0.0330      | yes    |
+| random_forest     | 0.9863 | 7,732,449.4948  | 2.4720      | no     |
+| gradient_boosting | 0.9909 | 5,142,824.3928  | 1.0530      | no     |
+| voting            | 0.9906 | 5,328,411.2206  | 3.7330      | no     |
 
 best: polynomial (r2=0.9941)
 ```
@@ -130,6 +161,10 @@ best: polynomial (r2=0.9941)
 `Task_Regression.pdf` reports 0.9805 for the linear pipeline and 0.9940 for the polynomial
 one, so the two models with no `alpha` to differ on reproduce the assignment exactly. Ridge
 and Lasso land within 0.0007 of its numbers; the PDF does not state its `random_state`.
+
+**The three untaught models lose here**, and the taught `polynomial` beats the best of them
+by 0.0032 r² while fitting in a hundredth of the time. Salary is close to a smooth function
+of the ten inputs, and a degree-2 expansion captures that better than any number of trees.
 
 ```
 $ python -m stockout compare --dataset loans --task classification
@@ -146,9 +181,29 @@ $ python -m stockout compare --dataset loans --task classification
 
 The simplest model wins, which is the useful result: approval is close to a linear function
 of credit score and income, and the five more complex models spend their extra capacity on
-noise. `Loan_Amount` is the harder target — the linear models manage r² ≈ 0.69 against the
-polynomial pipeline's 0.85, because the amount is exactly zero whenever the loan was
-refused and that kink is not something a straight line can follow.
+noise.
+
+`Loan_Amount` reverses the salary verdict, and that is the most instructive number here:
+
+```
+$ python -m stockout compare --dataset loans --task regression
+
+| model             | r2     | fit_seconds | taught |
+|-------------------|--------|-------------|--------|
+| linear            | 0.6897 | 0.0330      | yes    |
+| ridge             | 0.6897 | 0.0030      | yes    |
+| lasso             | 0.6897 | 0.0020      | yes    |
+| polynomial        | 0.8545 | 0.0120      | yes    |
+| random_forest     | 0.9371 | 2.7970      | no     |
+| gradient_boosting | 0.8923 | 1.4800      | no     |
+| voting            | 0.8932 | 4.0510      | no     |
+```
+
+The amount is exactly zero whenever the loan was refused, so the surface has a kink. A
+straight line cannot follow it (r² 0.69), a quadratic partly can (0.85), and a forest —
+which splits rather than fits a curve — handles it best at 0.94. Two datasets, opposite
+answers about whether the extra complexity was worth it. That is the argument for keeping
+the `taught` column visible rather than just sorting by score.
 
 ## Serving one prediction
 
@@ -192,7 +247,7 @@ src/stockout/
   persistence.py   joblib save/load
   plots.py         matplotlib + seaborn charts for the notebook
 notebooks/
-  01_explore.ipynb the assignment's 17 steps, then both comparison tables
+  01_explore.ipynb the assignment's 17 steps, then all three comparison tables
 data/
   salary.csv       10,000 rows, regression
   loans.csv        10,000 rows, classification and regression

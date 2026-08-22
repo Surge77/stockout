@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockout"
-version = "0.7.0"
-description = "Ten scikit-learn models on two course datasets, behind one Pipeline each, scored on one held-out split."
+version = "0.8.0"
+description = "Thirteen scikit-learn models on two course datasets, behind one Pipeline each, scored on one held-out split."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -61,7 +61,7 @@ stockout = ["py.typed"]
 # Point at the in-repo virtualenv so the editor and the CLI resolve the same pandas.
 venvPath = "."
 venv = ".venv"
-include = ["src"]
+include = ["src", "scripts"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 reportMissingImports = true

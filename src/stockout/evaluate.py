@@ -21,7 +21,7 @@ from sklearn.model_selection import train_test_split
 
 from .config import RANDOM_SEED, TEST_SIZE, Task
 from .datasets import Dataset, load, xy
-from .registry import build, model_names
+from .registry import build, model_names, spec_for
 
 
 def split(
@@ -70,6 +70,7 @@ def evaluate(
     row: dict[str, float | str] = {"model": name}
     row.update(score(task, Y_test, model.predict(X_test)))
     row["fit_seconds"] = round(fit_seconds, 3)
+    row["taught"] = "yes" if spec_for(name, task=task).taught else "no"
     return row
 
 
