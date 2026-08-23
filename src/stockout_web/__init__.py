@@ -1,7 +1,7 @@
 """The web app: a user module that forecasts, and an admin module that trains.
 
-Separate from `stockout` on purpose. `docs/architecture.md` claims everything between
-`data/` and `persistence.py` is pure — same input, same output, no I/O — and a web app is
+Separate from `stockout` on purpose. Everything between `data/` and `persistence.py`
+is pure — same input, same output, no I/O — and a web app is
 nothing but I/O. Keeping it in its own package makes the dependency direction
 unambiguous: the app imports the library, and the library has never heard of the app.
 

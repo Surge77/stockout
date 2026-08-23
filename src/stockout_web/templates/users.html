@@ -16,7 +16,9 @@
           <td>{{ account.email }}</td>
           <td>{% if account.is_admin %}<b class="tag">admin</b>{% else %}user{% endif %}</td>
           <td>{{ "active" if account.is_active else "deactivated" }}</td>
-          <td class="mono">{{ account.created_at }}</td>
+          {# Microseconds and a +00:00 offset are not something a reader needs, and the
+             admin dashboard already trims them the same way. #}
+          <td class="mono">{{ account.created_at[:19]|replace('T', ' ') }} UTC</td>
           <td class="actions">
             <form method="post" action="/admin/users/{{ account.id }}/role" class="inline">
               <select name="role">
@@ -28,7 +30,11 @@
             </form>
             <form method="post" action="/admin/users/{{ account.id }}/active" class="inline">
               <input type="hidden" name="is_active" value="{{ 'false' if account.is_active else 'true' }}">
-              <button type="submit">{{ "Deactivate" if account.is_active else "Restore" }}</button>
+              {# Deactivating is the one destructive control on the page; it should not
+                 look identical to the button beside it. #}
+              <button type="submit" class="{{ 'danger' if account.is_active else 'secondary' }}">
+                {{- "Deactivate" if account.is_active else "Restore" -}}
+              </button>
             </form>
           </td>
         </tr>

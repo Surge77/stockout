@@ -173,6 +173,17 @@ def by_id(connection: sqlite3.Connection, user_id: int) -> User | None:
     return _row_to_user(row) if row else None
 
 
+def by_email(connection: sqlite3.Connection, email: str) -> User | None:
+    """The account at this address, or None. Normalised first, so the lookup matches
+    what `create` would have stored rather than relying on the collation alone."""
+    try:
+        address = normalise_email(email)
+    except UserError:
+        return None
+    row = connection.execute("SELECT * FROM users WHERE email = ?", (address,)).fetchone()
+    return _row_to_user(row) if row else None
+
+
 def listing(connection: sqlite3.Connection) -> list[User]:
     """Every account, oldest first. Admins are listed with everybody else."""
     rows = connection.execute("SELECT * FROM users ORDER BY id").fetchall()

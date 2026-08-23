@@ -7,6 +7,7 @@ loses access on their very next request rather than at their next sign-in.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Form, Request
@@ -81,8 +82,7 @@ async def retrain(
 async def comparison(request: Request, admin: AdminUser) -> HTMLResponse:
     """Every registered model on one split, for both tasks."""
     service = _service(request)
-    regression = service.comparison("regression")
-    classification = service.comparison("classification")
+    regression, classification, floor = await service.comparison_tables()
     return page(
         request,
         "comparison.html",
@@ -91,7 +91,7 @@ async def comparison(request: Request, admin: AdminUser) -> HTMLResponse:
             "classification_rows": classification.to_dict("records"),
             "regression_markdown": to_markdown(regression),
             "classification_markdown": to_markdown(classification),
-            "floor": f"{service.class_floor():.1%}",
+            "floor": f"{floor:.1%}",
             "dataset": service.artifact.dataset,
         },
     )
@@ -100,7 +100,7 @@ async def comparison(request: Request, admin: AdminUser) -> HTMLResponse:
 @router.get("/users", response_class=HTMLResponse)
 async def user_list(request: Request, admin: AdminUser) -> HTMLResponse:
     with db.session() as connection:
-        return page(request, "users.html", {"rows": users.listing(connection)})
+        return page(request, "users.html", _accounts_context(connection))
 
 
 @router.post("/users", response_class=HTMLResponse)
@@ -128,9 +128,17 @@ async def change_role(
 
 @router.post("/users/{user_id}/active", response_class=HTMLResponse)
 async def change_active(
-    request: Request, admin: AdminUser, user_id: int, active: Annotated[str, Form()]
+    request: Request,
+    admin: AdminUser,
+    user_id: int,
+    is_active: Annotated[str, Form()],
 ) -> HTMLResponse:
-    wanted = active == "1"
+    """The form posts `is_active` as the word, matching `users.set_active`'s own argument.
+
+    It used to require a field called `active` holding `"1"`, which the template never
+    sent — so the deactivate button answered 422 while looking perfectly fine.
+    """
+    wanted = is_active.strip().lower() in {"1", "true", "yes", "on"}
     return await _mutate(
         request, lambda c: users.set_active(c, user_id=user_id, is_active=wanted)
     )
@@ -144,5 +152,18 @@ async def _mutate(request: Request, operation) -> HTMLResponse:  # type: ignore[
             operation(connection)
         except users.UserError as exc:
             error = str(exc)
-        rows = users.listing(connection)
-    return page(request, "users.html", {"rows": rows, "error": error})
+        context = _accounts_context(connection)
+    context["error"] = error
+    return page(request, "users.html", context)
+
+
+def _accounts_context(connection: sqlite3.Connection) -> dict[str, object]:
+    """Everything `users.html` reads.
+
+    Built in one place because it was previously assembled twice, by hand, with the wrong
+    key both times: the routes passed `rows` while the template looped over `accounts`, and
+    `roles` was never passed at all — so the table rendered headers over nothing and both
+    role dropdowns came out with no options. Jinja renders an undefined name as the empty
+    string, so neither failed loudly.
+    """
+    return {"accounts": users.listing(connection), "roles": list(users.ROLES)}

@@ -9,26 +9,66 @@
   <em>for that {{ entity_label }}</em>.
 </p>
 
-<form method="post" action="/forecast" class="card form">
+<details class="explainer">
+  <summary>What am I actually asking for?</summary>
+  <div class="explainer-body">
+    <p>
+      The models read a date as <strong>a kind of day</strong> — which weekday, which
+      month, which week of the year — and answer from the
+      {{ date_min[:4] }}–{{ observed_through[:4] }} sales history they were fitted on.
+      No feature is a lag, so nothing about a day has to have happened yet for the models
+      to score it, and the date box is open-ended forward.
+    </p>
+    <p>
+      Two regions, and they mean different things. Up to
+      <code>{{ observed_through }}</code> the real figure is in the data, so the page shows
+      it beside the prediction and you can see the error — the model being checked rather
+      than trusted. Past that date there is nothing to check against: the answer is a
+      genuine forecast, and no measured score covers it.
+    </p>
+    <p>
+      Both answers are relative to <strong>the {{ entity_label }} you picked</strong>, not
+      to all {{ entity_label }}s. A big shop and a small one have their own idea of a
+      busy day, so &ldquo;High&rdquo; always means high <em>for this shop</em>.
+    </p>
+    <p class="note">
+      The two models are fitted separately and are allowed to disagree — when they do, the
+      page shows both rather than hiding one.
+    </p>
+  </div>
+</details>
+
+<form method="post" action="/forecast" class="card">
   <div class="field">
     <label for="store">{{ entity_label|capitalize }}</label>
     <select id="store" name="store" required>
-      {% for option in entities %}
-        <option value="{{ option }}" {% if option == store %}selected{% endif %}>{{ option }}</option>
+      {% for option in options %}
+        <option value="{{ option.entity }}" {% if option.entity == store %}selected{% endif %}>
+          {{ option.option_label }}
+        </option>
       {% endfor %}
     </select>
+    <small>
+      Ordered quietest to busiest, so the list reads as a range. The figure is that
+      shop's median day across <code>{{ date_min }}</code>&ndash;<code>{{ observed_through }}</code>.
+    </small>
   </div>
 
   <div class="field">
     <label for="date">Date</label>
     <input type="date" id="date" name="date" required
-           value="{{ date or date_max }}" min="{{ date_min }}" max="{{ date_max }}">
-    <small>The model was fitted on {{ date_min }} to {{ date_max }}.</small>
+           value="{{ date or observed_through }}" min="{{ date_min }}">
+    <small>
+      Data runs to <code>{{ observed_through }}</code>; up to there the true figure is shown
+      beside the prediction. Later dates are answered as forecasts. Earlier than
+      <code>{{ date_min }}</code> is refused — there is nothing behind it.
+    </small>
   </div>
 
   <div class="field checks">
-    <label><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion running</label>
-    <label><input type="checkbox" name="school_holiday" value="true"> School holiday</label>
+    <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion running</label>
+    <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
+    <label class="check"><input type="checkbox" name="state_holiday" value="true" {% if state_holiday %}checked{% endif %}> Public holiday</label>
   </div>
 
   <button type="submit">Predict</button>
@@ -38,21 +78,76 @@
 <section class="card result">
   <h2>{{ entity_label|capitalize }} {{ answer.entity }} — {{ answer.date.strftime('%A %d %B %Y') }}</h2>
 
-  <div class="answers">
-    <div class="answer">
-      <span class="answer-label">Predicted sales</span>
-      <span class="answer-value">{{ sales }}</span>
-      <small>{{ regressor|replace('_', ' ') }}</small>
+  {% if verdict %}
+  <div class="verdict tone-{{ verdict.tone }}">
+    <p class="verdict-title">{{ verdict.title }}</p>
+    <p class="verdict-advice">{{ verdict.advice }}</p>
+    <p class="verdict-compare">{{ verdict.comparison_text }}</p>
+    {% if verdict.models_disagree %}
+    {# Without this the two lines above contradict each other in plain sight: one is
+       written from the classifier's label, the other from the regressor's number. #}
+    <p class="verdict-split">{{ verdict.disagreement_text }}</p>
+    {% endif %}
+
+    {% set edges = verdict.band_edges() %}
+    <div class="scale" role="img"
+         aria-label="{{ sales }} on this {{ entity_label }}'s own quiet to busy range">
+      <span class="band quiet" style="width: {{ edges[0] }}%"></span>
+      <span class="band typical" style="width: {{ edges[1] - edges[0] }}%"></span>
+      <span class="band busy" style="width: {{ 100 - edges[1] }}%"></span>
+      <span class="marker" style="left: {{ verdict.scale_position() }}%"></span>
     </div>
-    <div class="answer">
-      <span class="answer-label">Demand class</span>
-      <span class="answer-value class-{{ demand_class|lower }}">{{ demand_class }}</span>
+    <p class="scale-key">
+      <span class="key quiet">Quiet</span>
+      <span class="key typical">Typical</span>
+      <span class="key busy">Busy</span>
+    </p>
+
+    <p class="note">
+      {{ verdict.profile.type_label }} &middot; {{ verdict.profile.assortment_label }}
+      &middot; {{ verdict.profile.competition_text }}
+      &middot; {{ verdict.profile.days }} days of history
+    </p>
+  </div>
+  {% endif %}
+
+  {% if caveat %}
+  <p class="caveat" role="note">
+    <strong>Forecast.</strong> {{ caveat }}
+  </p>
+  {% endif %}
+
+  <div class="answers">
+    {% if actual %}
+    <div class="answer actual">
+      <span class="label">What it actually took</span>
+      <span class="value">{{ actual }}</span>
+      <small>recorded in the data &mdash; the model did not see this row at serving time</small>
+      <span class="interval">{{ error_amount }} ({{ error_pct }}) <em>prediction error</em></span>
+    </div>
+    {% endif %}
+    <div class="answer regression">
+      <span class="label">Predicted sales for the day</span>
+      <span class="value">{{ sales }}</span>
+      <small>{{ regressor|replace('_', ' ') }}</small>
+      {% if verdict %}
+      <span class="interval">{{ '{:,.0f}'.format(verdict.spread_low) }}–{{ '{:,.0f}'.format(verdict.spread_high) }}
+        <em>across all seven regressors</em></span>
+      {% endif %}
+    </div>
+    <div class="answer classification class-{{ demand_class|lower }}">
+      <span class="label">Demand class for this store</span>
+      <span class="value">{{ demand_class }}</span>
       <small>{{ classifier|replace('_', ' ') }}</small>
     </div>
   </div>
 
   <p class="cuts">
-    This {{ entity_label }}'s own cut points:
+    <strong>What Low, Medium and High mean for this shop on this day.</strong>
+    Each shop is judged against itself: its days are sorted and split into its quietest
+    third, its middle third and its busiest third. A day is High if it clears the upper
+    figure below. The band moves with the shop &mdash; as it grows, so does what counts
+    as a busy day for it.<br>
     <strong>Low</strong> &lt;{{ low_cut }} &middot;
     <strong>Medium</strong> {{ low_cut }}–{{ high_cut }} &middot;
     <strong>High</strong> &gt;{{ high_cut }}
@@ -79,6 +174,7 @@
     <p class="note">
       They disagree because they are different models, not because one is broken. The
       spread is the honest width of the estimate.
+      {% if verdict %} {{ verdict.spread_text }}{% endif %}
     </p>
   </details>
   {% endif %}

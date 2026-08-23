@@ -22,6 +22,21 @@ from .users import User
 
 SESSION_KEY = "user_id"
 
+#: A one-shot message that survives exactly one redirect. In the session rather than the
+#: query string, because a message in a URL gets bookmarked, shared and replayed long
+#: after it stopped being true.
+NOTICE_KEY = "notice"
+
+
+def set_notice(request: Request, message: str) -> None:
+    """Leave a message for the page this request is about to redirect to."""
+    request.session[NOTICE_KEY] = message
+
+
+def take_notice(request: Request) -> str | None:
+    """Read the pending message and clear it, so it shows once and not again."""
+    return request.session.pop(NOTICE_KEY, None)
+
 
 def login_session(request: Request, user: User) -> None:
     """Mark this browser as signed in as `user`.
@@ -31,10 +46,27 @@ def login_session(request: Request, user: User) -> None:
     """
     request.session.clear()
     request.session[SESSION_KEY] = user.id
+    _forget(request)
 
 
 def logout_session(request: Request) -> None:
     request.session.clear()
+    _forget(request)
+
+
+def _forget(request: Request) -> None:
+    """Drop the per-request cache after the session changes underneath it.
+
+    Both callers currently redirect rather than render, so nothing would read a stale
+    value today. That is a property of the current routes, not of this function, and it
+    is not one worth relying on.
+    """
+    if hasattr(request.state, _REQUEST_CACHE):
+        delattr(request.state, _REQUEST_CACHE)
+
+
+#: Where the resolved account is cached for the life of one request.
+_REQUEST_CACHE = "stockout_user"
 
 
 def signed_in_user(request: Request) -> User | None:
@@ -42,7 +74,31 @@ def signed_in_user(request: Request) -> User | None:
 
     Used by the pages that render differently for a visitor than for a member. Routes that
     *require* an account use `current_user` instead, which turns absence into a redirect.
+
+    Memoised on `request.state` because a protected page resolved the same account at
+    least twice: once for the `CurrentUser` dependency and once inside `page`, which puts
+    the user in every template's context. Each of those opened its own SQLite connection
+    for the same row. The cache lives and dies with the request, so a role changed by an
+    admin still takes effect on the very next one — which is the property the module
+    docstring is about, and the reason this is not cached any longer than a request.
     """
+    cached = getattr(request.state, _REQUEST_CACHE, _MISSING)
+    if cached is not _MISSING:
+        return cached  # type: ignore[return-value]
+
+    user = _resolve(request)
+    setattr(request.state, _REQUEST_CACHE, user)
+    return user
+
+
+class _Missing:
+    """A sentinel, because `None` is a real cached answer: "nobody is signed in"."""
+
+
+_MISSING = _Missing()
+
+
+def _resolve(request: Request) -> User | None:
     user_id = request.session.get(SESSION_KEY)
     if not isinstance(user_id, int):
         return None

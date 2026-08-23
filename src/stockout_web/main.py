@@ -9,6 +9,7 @@ the app.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -19,7 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from stockout.errors import StockoutError
 
-from . import config, db
+from . import config, db, users
 from .routers import admin, forecast
 from .routers import auth as auth_routes
 from .service import ModelService
@@ -35,8 +36,59 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     the process at startup instead of turning into a 500 on somebody's first forecast.
     """
     db.initialise()
+    _seed_admin()
     app.state.models = ModelService.load()
-    yield
+
+    # Warm the comparison tables in the background. Fitting every registered model for
+    # both tasks takes about a minute and a half, almost all of it `svc`. Done here the
+    # app still answers immediately and the admin page is usually ready before anybody
+    # opens it; done lazily the first visitor waits the whole time; done synchronously
+    # above, every restart does.
+    warm = asyncio.create_task(_warm_comparisons(app))
+    try:
+        yield
+    finally:
+        warm.cancel()
+
+
+async def _warm_comparisons(app: FastAPI) -> None:
+    """Precompute the comparison tables, and never take the app down if it fails."""
+    try:
+        await app.state.models.comparison_tables()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Broad on purpose: a warm-up is an optimisation, and no failure in it is worth
+        # taking the app down for. The page still computes on demand.
+        print(f"comparison warm-up skipped: {exc}")
+
+
+def _seed_admin() -> None:
+    """Create the administrator named by the environment, if it is not there already.
+
+    `config.seed_admin` and the registration docstring both described this account as the
+    supported way to get an admin on a fresh install, and nothing called it — leaving
+    "whoever registers first" as the only route to the admin module, which is not
+    something an operator can arrange in advance.
+
+    Idempotent: an existing address is left exactly as it is, including its role. Silently
+    promoting an account because the environment changed would be a privilege escalation
+    driven by a config file.
+    """
+    credentials = config.seed_admin()
+    if credentials is None:
+        return
+
+    email, password = credentials
+    with db.session() as connection:
+        if users.by_email(connection, email) is not None:
+            return
+        try:
+            users.create(connection, email=email, password=password, role="admin")
+        except users.UserError as exc:
+            # A refused seed must not take the process down: the app is still usable, and
+            # the reason is something the operator needs to read rather than a traceback.
+            print(f"seed admin not created: {exc}")
 
 
 app = FastAPI(title="stockout — retail sales and product demand prediction", lifespan=lifespan)
@@ -47,7 +99,9 @@ app.add_middleware(
     secret_key=config.session_secret(),
     max_age=config.SESSION_MAX_AGE_SECONDS,
     same_site="lax",
-    https_only=False,
+    # `secure_cookies()` existed and was never read, so `STOCKOUT_WEB_HTTPS=1` did
+    # nothing and the session cookie went out without `Secure` even behind TLS.
+    https_only=config.secure_cookies(),
 )
 
 app.mount("/static", StaticFiles(directory=str(config.STATIC_DIR)), name="static")
@@ -65,7 +119,10 @@ async def http_error(request: Request, exc: StarletteHTTPException) -> HTMLRespo
     return page(
         request,
         "error.html",
-        {"status": exc.status_code, "detail": exc.detail},
+        # `error.html` reads `code` and `message`. Jinja renders an undefined name as the
+        # empty string, so the old `status`/`detail` keys produced a page with an empty
+        # heading and an empty red box on every 403 and 404.
+        {"code": exc.status_code, "message": exc.detail},
         status_code=exc.status_code,
     )
 
@@ -76,6 +133,6 @@ async def domain_error(request: Request, exc: StockoutError) -> HTMLResponse:
     return page(
         request,
         "error.html",
-        {"status": status.HTTP_400_BAD_REQUEST, "detail": str(exc)},
+        {"code": status.HTTP_400_BAD_REQUEST, "message": str(exc)},
         status_code=status.HTTP_400_BAD_REQUEST,
     )

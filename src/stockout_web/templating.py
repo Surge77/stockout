@@ -31,6 +31,34 @@ def page(
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     """Render `template` with the signed-in user always available as `user`."""
-    merged: dict[str, Any] = {"user": auth.signed_in_user(request)}
+    merged: dict[str, Any] = {
+        "user": auth.signed_in_user(request),
+        "notice": auth.take_notice(request),
+        **_provenance(request),
+    }
     merged.update(context or {})
     return templates.TemplateResponse(request, template, merged, status_code=status_code)
+
+
+def _provenance(request: Request) -> dict[str, Any]:
+    """What the footer needs to describe the data honestly, on every page.
+
+    Read from the loaded artefact rather than written into the templates. Both footers
+    said "synthetic" long after the models had been retrained on real Rossmann data — a
+    claim that is invisible to the test suite, survives every refactor, and is exactly the
+    kind of stale sentence a reader is entitled to trust. Deriving it means retraining on
+    a different source updates the wording by itself.
+
+    Falls back to nothing when the app is running with a stubbed service, so the templates
+    have to cope with absence anyway.
+    """
+    models = getattr(request.app.state, "models", None)
+    artifact = getattr(models, "artifact", None)
+    if artifact is None:
+        return {}
+    return {
+        "data_name": getattr(artifact, "dataset", None),
+        "data_is_real": getattr(artifact, "dataset", None) != "synthetic",
+        "data_entities": len(getattr(artifact, "entities", []) or []),
+        "data_entity_label": getattr(artifact, "entity_label", "store"),
+    }

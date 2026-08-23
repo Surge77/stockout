@@ -1,7 +1,17 @@
 """Settings for the web app, read from the environment at call time.
 
-A separate package from `stockout` on purpose. `docs/architecture.md` claims that
-everything between `data/` and `persistence.py` is pure — same input, same output, no
+Every variable this app reads, in one place, because there is no `.env.example` to point
+at — nothing here is required, and all four have working defaults:
+
+    STOCKOUT_WEB_DB          path to the accounts database   (default: artifacts/users.db)
+    STOCKOUT_WEB_SECRET      session signing key             (default: random per process)
+    STOCKOUT_WEB_HTTPS       1/true/yes to mark the cookie Secure, behind TLS only
+    STOCKOUT_ADMIN_EMAIL     first administrator, created at startup if absent
+    STOCKOUT_ADMIN_PASSWORD  its password; both must be set or neither is used
+
+
+A separate package from `stockout` on purpose. Everything between `data/` and
+`persistence.py` is pure — same input, same output, no
 I/O — and a web app is nothing but I/O. Keeping it outside `src/stockout/` makes the
 dependency direction unambiguous: the app imports the library, and the library has never
 heard of the app.
@@ -26,10 +36,6 @@ DEFAULT_DATABASE = _ROOT / "artifacts" / "users.db"
 #: which is the one thing a cookie must not be.
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 8
 
-#: Only these origins may call the API from a browser. Never `*`: this app runs on a
-#: laptop and has no business accepting a cross-site request from anywhere else.
-ALLOWED_ORIGINS: tuple[str, ...] = ("http://127.0.0.1:8000", "http://localhost:8000")
-
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -46,7 +52,7 @@ def session_secret() -> str:
     Generated per process when unset, which is right for development and wrong for
     anything else: every restart invalidates every session, and two workers would sign
     with different keys and reject each other's cookies. `STOCKOUT_WEB_SECRET` is how you
-    fix that, and `.env.example` says so.
+    fix that; the module docstring lists it with the rest.
 
     Generated rather than defaulted to a constant, because a hard-coded fallback secret
     is the one that ends up in production — it works, so nobody notices it is public.

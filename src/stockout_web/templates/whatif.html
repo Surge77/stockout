@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}What if — stockout{% endblock %}
+
+{% block content %}
+<h1>What would a shop like this take?</h1>
+<p class="lede">
+  No store id. Describe a shop by its attributes and get a sales estimate for one day —
+  the same way a house-price model works from bedrooms, floor area and location rather
+  than from a house's address.
+</p>
+
+<details class="explainer">
+  <summary>Why this is a different model from the forecast page</summary>
+  <div class="explainer-body">
+    <p>
+      The forecast page answers <em>how much will store 12 take on Monday</em>, and the
+      model it uses is allowed to know that store 12 is store 12 — the store's id is one
+      of its inputs. That model cannot answer this page's question: a shop that does not
+      exist has no id, and there is no honest value to put in that box.
+    </p>
+    <p>
+      So the artefact carries a second regressor, fitted on every feature <strong>except
+      identity</strong> and except the two competitor/promotion <em>ages</em>, which
+      nobody describing a new shop could supply. It is scored differently too:
+      it is tested by hiding one shop from the training data completely and then asking
+      about it &mdash; which is exactly the situation you are in on this page.
+      {% if unseen_r2 %}
+      It scores <strong>{{ '%.3f'|format(unseen_r2) }}</strong> on that test, on a scale
+      where 1.00 is perfect and 0.00 is no better than always answering with the average
+      shop. {% endif %}Any other score would be measuring an easier question than the one
+      this page asks.
+    </p>
+    <p class="note">
+      This only works because what a shop <em>is</em> &mdash; its size of range, how close
+      its nearest rival sits, which group it belongs to &mdash; genuinely moves how much it
+      sells. When those details carried no real signal, the same test scored −0.70: worse
+      than useless, since simply answering with the average would have beaten it. The page
+      would still have shown a confident number. That is why the score above is on screen
+      rather than buried.
+    </p>
+  </div>
+</details>
+
+<form method="post" action="/what-if" class="card">
+  <div class="field-row">
+    <div class="field">
+      <label for="store_type">Store type</label>
+      <select id="store_type" name="store_type">
+        {% for code, label in store_types %}
+        <option value="{{ code }}" {% if code == store_type %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <small>Anonymised in the source data — a label, with no published meaning.</small>
+    </div>
+
+    <div class="field">
+      <label for="assortment">Assortment</label>
+      <select id="assortment" name="assortment">
+        {% for code, label in assortments %}
+        <option value="{{ code }}" {% if code == assortment %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <small>How wide a range the shop stocks. Basic &rarr; extended.</small>
+    </div>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label for="competition_distance">Nearest competitor (metres)</label>
+      <input type="number" id="competition_distance" name="competition_distance"
+             min="0" step="10" placeholder="e.g. 1200"
+             value="{{ competition_distance or '' }}">
+      <small>
+        Most shops here sit between <code>200</code> and <code>20,000</code> m.
+        Leave empty for &ldquo;no competitor recorded&rdquo;.
+      </small>
+    </div>
+
+    <div class="field">
+      <label for="date">Date</label>
+      <input type="date" id="date" name="date" required
+             value="{{ date or observed_through }}" min="{{ date_min }}">
+      <small>
+        Read as a kind of day — weekday, month, week of year. From
+        <code>{{ date_min }}</code> onward. A described shop has no actual to check
+        against in either region, so a date past <code>{{ observed_through }}</code>
+        is no less answerable than one inside.
+      </small>
+    </div>
+  </div>
+
+  <h3>The day itself &mdash; each one is a model input, not a display setting</h3>
+  <div class="field checks">
+    <label class="check"><input type="checkbox" name="promo2" value="true" {% if promo2 %}checked{% endif %}> Runs the continuing promotion</label>
+    <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion that day</label>
+    <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
+    <label class="check"><input type="checkbox" name="state_holiday" value="true" {% if state_holiday %}checked{% endif %}> Public holiday</label>
+  </div>
+
+  <button type="submit">Estimate</button>
+</form>
+
+{% if answer %}
+<section class="card result">
+  <h2>A shop like that, on {{ answer.date.strftime('%A %d %B %Y') }}</h2>
+
+  {% if caveat %}
+  <p class="caveat" role="note">
+    <strong>Forecast.</strong> {{ caveat }}
+  </p>
+  {% endif %}
+
+  <div class="answers">
+    <div class="answer regression">
+      <span class="label">Estimated sales for the day</span>
+      <span class="value">{{ sales }}</span>
+      <small>from the model that is never told which shop is which, so it can answer
+        about one that does not exist yet{% if unseen_r2 %} &middot; scores
+        {{ '%.3f'|format(unseen_r2) }} out of 1.00 on shops it has never seen{% endif %}</small>
+    </div>
+    <div class="answer classification class-{{ answer.demand_class|lower }}">
+      <span class="label">Demand class</span>
+      <span class="value">{{ answer.demand_class }}</span>
+      <small>judged against every shop in the data, because a shop that does not exist
+        has no past days of its own to be compared with</small>
+    </div>
+  </div>
+
+  <h3>What each attribute is worth here</h3>
+  <div class="scroll">
+    <table class="results">
+      <thead><tr><th>Input</th><th class="num">Effect on the estimate</th></tr></thead>
+      <tbody>
+        {% for label, value in why %}
+        <tr>
+          <td>{{ label }}</td>
+          <td class="num {% if value.startswith('-') %}warn{% endif %}">{{ value }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="note">
+    Each row is a one-at-a-time counterfactual: hold everything else still, move that one
+    input to a plain baseline, and see how far the answer moves. They do not add up to the
+    total, and they are not meant to — a tree ensemble is not additive and these inputs
+    interact. The question answered is <em>what is this attribute doing here</em>.
+  </p>
+
+  <p class="note">
+    The demand class here uses the cut points for <strong>all</strong> stores, because a
+    shop that does not exist has no history of its own to take terciles of. On the
+    forecast page the class is always relative to the store you picked.
+  </p>
+</section>
+{% endif %}
+{% endblock %}
