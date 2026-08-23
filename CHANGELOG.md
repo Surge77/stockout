@@ -5,9 +5,167 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
-### Planned
+### Changed
 
-- Nothing.
+- **A store's trading level now comes from its own attributes.** `data/synth.py` drew it
+  as `rng.integers(3_500, 9_000)`, in a different function from the one generating store
+  metadata, so nothing tied an attribute to the level it was supposed to explain. Measured
+  on the old sample: `competition_distance` correlated with mean sales at r = -0.13,
+  assortment moved the group mean by 8%, and `entity_code` alone reached r² 0.49.
+
+  The consequence was not subtle. Holding a store out of training and predicting it scored
+  **r² -0.696** — worse than guessing that store's own average. The package could only
+  answer about shops it had memorised, which is what made it feel like a lookup table with
+  a model bolted on.
+
+  The level is now `assortment x store_type x competition x promo2`, times an unexplained
+  store effect that is kept deliberately so identity is still worth something. After:
+  `competition_distance` r = **+0.48**, assortment spread **38.3%**, and a held-out store
+  scores **r² +0.703**. Dropping `entity_code` entirely now costs 0.002 r².
+
+  Every committed number changed. `data/sample_sales.csv` was regenerated, the artefact
+  retrained and the README tables replaced.
+
+- **Artefact version 3 -> 4.** It carries a second regressor and its leave-one-store-out
+  score. Older artefacts are refused with an instruction to retrain, as before.
+
+- **The forecast page shows the spread across all seven regressors** beside the headline
+  number instead of hiding it in a collapsed panel.
+
+
+- **The hold-out is chronological, and the taught split is now measured rather than
+  assumed.** `evaluate.split` takes a `strategy`: `"chronological"` (the new default)
+  holds out the last fifth of the calendar, so every training day precedes every test
+  day; `"shuffled"` is the taught `train_test_split`, still reachable as
+  `--split shuffled` and still what `check_taught.py` sees.
+
+  The cut is on the date, not on row position. A store-day is fifty rows sharing a date,
+  and slicing the last fifth of the *rows* would leave the same day on both sides of the
+  split — the leak the change exists to remove.
+
+  Scores fall, which is the point. `gradient_boosting` r² 0.8674 → 0.8488, `random_forest`
+  0.9249 → 0.8742. The committed artefact was retrained and the README tables regenerated.
+
+- **The classification floor moved 34.2% → 44.6%.** Per-store terciles fitted on the
+  training period do not divide a later period into equal thirds; sales drift. The old
+  README explained the 34.2% as a property of terciles, which was only true because the
+  shuffled split mixed the periods together.
+
+- **Roles have their own sign-in pages.** `/login` for ordinary accounts, `/admin/login`
+  for administrators, landing on `/` and `/admin` respectively. One accounts table and one
+  credential check behind both: the door is a statement of intent, never a permission, and
+  the role is still read from the database after the password verifies. Both doors return
+  the same refusal text, so the pair cannot be used to discover which addresses hold admin.
+
+- **The register page says which kind of account it is about to create**, checked against
+  the table rather than described in the abstract.
+
+- **The footer no longer disclaims figures the page has not shown.** It is a template
+  block: sign-in pages describe the project, model pages carry the synthetic-data warning.
+
+### Added
+
+- **A what-if panel (`/what-if`) that takes no store id.** Describe a shop — type,
+  assortment, distance to the nearest competitor, whether it runs the continuing
+  promotion — and get an estimate for one day. This is the shape a house-price model has,
+  and it was impossible before the generator change above: the same page on the old data
+  would have returned confident nonsense.
+
+- **`stockout.hypothetical`** and a second regressor in the artefact, fitted without
+  `entity_code`. The deployed model cannot answer this question — a store it has never
+  seen has no id to supply — so the cold-start model exists to answer it and is scored
+  leave-one-store-out rather than on the ordinary hold-out.
+
+  It also excludes `competition_open_age_months` and `promo2_age_weeks`, which was found
+  by measuring rather than by reasoning: nobody describing a hypothetical shop knows when
+  its competitor opened, those inputs arrive as zero, zero never occurs in training, and
+  two clearly different shops came back within 4% of each other because both rows fell
+  down the same degenerate branch.
+
+- **Per-prediction contributions** on the what-if panel: what each described attribute is
+  worth in currency, as one-at-a-time counterfactuals. Labelled as such, because they are
+  not an additive decomposition and do not sum to the total.
+
+- **A public-holiday input** on both forms. `state_holiday` was already a live feature and
+  the form never exposed it.
+
+- **`stockout.leakage`** and `python -m stockout leakage` — fits every model under both
+  splits and reports the gap. The module `data/synth.py` had promised for two releases.
+
+  Regression: every model gains from shuffling, `polynomial` most at +0.0878 r², 15.5% of
+  its honest score. Classification: only the bagged ensembles gain; `logistic`,
+  `decision_tree` and `svc` score slightly *better* on the honest split, which is what the
+  explanation predicts — exploiting a neighbourhood of adjacent rows takes capacity a
+  linear boundary does not have.
+
+  This is what the AR(1) residual in the generator is for. With independent noise both
+  arms score the same and the experiment cannot tell a good split from a bad one.
+
+- **`presentation.py`** — the model output in words. Store profiles in the dropdown
+  (`Store 1 — Type A, Basic range, usually about 9,694 a day`), a verdict panel that says
+  what to do about the number, and a bar placing the prediction on that store's own
+  quiet/typical/busy range.
+
+- **A "What am I actually asking for?" explainer** on the forecast page: a date is read as
+  a *kind of day*, not a point in the future, and both answers are relative to the store
+  you picked.
+
+- **`STOCKOUT_ADMIN_EMAIL` / `STOCKOUT_ADMIN_PASSWORD` now do something.** `config.seed_admin`
+  was documented in two places and never called. It creates the administrator at startup,
+  idempotently, and never promotes an existing account.
+
+- **`tests/test_split.py`** and **`tests/web/`** — the chronological wall, the fitted-date
+  window, and the error page contract.
+
+### Fixed
+
+- **The error page rendered blank.** `main.py` passed `status`/`detail`; `error.html` reads
+  `code`/`message`. Jinja renders an undefined name as the empty string, so every 403 and
+  404 showed an empty heading inside an empty red box.
+- **The fitted-date window was enforced only by a browser attribute.** `min`/`max` on the
+  date input are ignored by any POST that skipped the page, and nothing below looked at the
+  range — an out-of-window date is a well-formed row that lands in the nearest leaf the fit
+  ever saw. `ModelService.forecast` now refuses it.
+- **`STOCKOUT_WEB_HTTPS` did nothing.** `config.secure_cookies()` was never read and
+  `https_only` was hardcoded `False`, so the session cookie went out without `Secure` even
+  behind TLS.
+- **`/admin/comparison` refitted every model on every request**, synchronously inside an
+  `async def`, so one admin opening it froze the whole server for everyone else. Cached per
+  `ModelService` and run off the event loop: 85.6s → 0.01s, and warmed in the background at
+  startup.
+- **The demand scale bar never drew its busy band.** The axis came from the raw min and
+  max, so `busy_cut` sat at exactly 100% whenever nothing exceeded it — a zero-pixel band
+  claiming the store is never busy.
+- **`.bar` was both the site header and the dashboard's score bars**, which inherited the
+  header's flex layout, padding and border. The score bars are `.meter` now.
+- Dead CSS: the result panel asked for `answer-label`/`answer-value` while the stylesheet
+  defined `.answer .label`/`.value`, so none of it applied. The checkbox row was missing
+  `class="check"`, which is why each box stretched to full width with its label underneath.
+- The site header was full-bleed while the content sat in a centred 1040px column.
+- `school_holiday` was dropped when the forecast form re-rendered.
+- `/register` was reachable while signed in, and creating an account there silently
+  replaced the session.
+- A protected page resolved the signed-in account two or three times, opening a SQLite
+  connection each time. Memoised per request, so an admin's change still lands on the next.
+- The artefact timestamp printed to the microsecond.
+
+### Removed
+
+- **`data/loans.csv` and `data/salary.csv`** — coursework leftovers from `0.7.0`, never
+  referenced by `src/` and never registered as sources. Only `CONTRIBUTING.md` still named
+  them, in commands that could not run.
+- **`config.ALLOWED_ORIGINS`** — no CORS middleware existed and none is needed for
+  same-origin server-rendered HTML. A constant documenting a restriction nothing enforces
+  is worse than no constant.
+- Two empty package directories, `src/stockout/evaluate/` and `src/stockout/split/`, left
+  behind by the `0.7.0` strip.
+- References to files that do not exist: `evaluate/leakage.py` and `features/lags.py` and
+  `validate.calendar_gaps` in the generator's docstring, `SeasonalNaive` and `NaiveLast`
+  among its claimed baselines, `docs/architecture.md` in two module docstrings, and
+  `.env.example` in `stockout_web/config.py` — replaced there by the actual list of
+  environment variables.
+- The README claim that "there is nothing for a shuffled split to leak through", which
+  `stockout leakage` disproves.
 
 ## [0.9.0] — 2026-08-22
 

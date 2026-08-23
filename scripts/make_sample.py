@@ -25,8 +25,10 @@ def main(argv: list[str]) -> int:
     n_stores = int(argv[0]) if argv else DEFAULT_STORES
     days = int(argv[1]) if len(argv) > 1 else DEFAULT_DAYS
 
-    sales = make_sales(n_stores=n_stores, start=START, days=days, seed=SEED)
+    # Stores first: their attributes now set each store's trading level, so the sales
+    # frame has to be built from the very frame that gets written beside it.
     stores = make_stores(n_stores=n_stores, seed=SEED)
+    sales = make_sales(n_stores=n_stores, start=START, days=days, seed=SEED, stores=stores)
 
     SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
     sales.to_csv(SAMPLE_PATH, index=False)

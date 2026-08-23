@@ -45,9 +45,9 @@ ruff check .                     # lint only — never `ruff format`
 pyright                          # must be 0 errors
 python scripts/check_taught.py   # no undocumented sklearn import
 
-python -m stockout compare --dataset salary --task regression
-python -m stockout compare --dataset loans --task classification
-python -m stockout compare --dataset loans --task regression
+python -m stockout compare --task regression
+python -m stockout compare --task classification
+python -m stockout leakage --task regression
 python -m nbconvert --execute --to notebook --inplace notebooks/01_explore.ipynb
 ```
 
