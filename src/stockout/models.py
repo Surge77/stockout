@@ -70,6 +70,23 @@ class ModelSpec:
     because a reader comparing a taught model against an untaught one should be told
     which is which rather than having to know."""
 
+    max_training_rows: int | None = None
+    """Fit this estimator on at most this many rows, sampling if the split is larger.
+
+    Only kernel `SVC` sets it, and only because its training cost is quadratic in the
+    number of rows. It takes about fifty seconds on the synthetic split's 37,000; Rossmann
+    trains on roughly 800,000, which is over four hundred times the work — hours, for one
+    cell of one table.
+
+    Dropping it instead was the obvious alternative and is the wrong one: `svc` is a
+    *taught* model, and a comparison table that quietly omits the slow taught model while
+    keeping the fast untaught ones is answering a different question than it claims to.
+
+    The cost is that the capped row is no longer a like-for-like comparison, so
+    `evaluate` reports `n_fit` for every model rather than hiding the difference in a
+    footnote. A reader can then see that `svc` lost to `random_forest` on a twentieth of
+    the data and judge what that is worth."""
+
 
 def _pipeline(estimator: Any) -> Pipeline:
     return Pipeline([("Scaler", StandardScaler()), ("Model", estimator)])
@@ -137,6 +154,13 @@ def _bagging(seed: int) -> Pipeline:
     return _pipeline(BaggingClassifier(random_state=seed))
 
 
+#: The cap on `svc`'s training rows. Chosen as the largest round number that keeps one
+#: fit inside about two minutes on the machine this was developed on — a comparison table
+#: nobody waits for is a table nobody reads. Comfortably above the synthetic split, so the
+#: cap is inert there and the published synthetic figures are unaffected by its existence.
+SVC_MAX_ROWS = 50_000
+
+
 def _svc(seed: int) -> Pipeline:
     return _pipeline(SVC(random_state=seed))
 
@@ -169,5 +193,5 @@ CLASSIFIERS: tuple[ModelSpec, ...] = (
     ModelSpec("decision_tree", "classification", _decision_tree, "one tree"),
     ModelSpec("random_forest", "classification", _random_forest, "100 trees, bagged"),
     ModelSpec("bagging", "classification", _bagging, "10 trees on bootstrap samples"),
-    ModelSpec("svc", "classification", _svc, "RBF kernel"),
+    ModelSpec("svc", "classification", _svc, "RBF kernel", max_training_rows=SVC_MAX_ROWS),
 )

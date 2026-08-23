@@ -87,12 +87,34 @@ def add_calendar_features(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def add_store_features(frame: pd.DataFrame, stores: pd.DataFrame | None) -> pd.DataFrame:
+def add_store_features(
+    frame: pd.DataFrame,
+    stores: pd.DataFrame | None,
+    *,
+    age_as_of: pd.Timestamp | None = None,
+) -> pd.DataFrame:
     """Join per-entity metadata and turn its three date columns into ages.
 
     `store.csv` is one row per store, so joining it alone gives every day of a store's
     history the same constant. The useful features are how far *this row's date* is from
     the competitor opening and from the promotion start, which vary down the frame.
+
+    `age_as_of` caps the date the **ages** are measured from, and exists for serving a
+    date beyond the training window. The two kinds of date feature behave differently out
+    there and the difference decides what is safe:
+
+    The calendar features are cyclic. `day_of_week`, `month`, `week_of_year` for a day in
+    2030 take values the fit has already seen thousands of times, so they extrapolate for
+    free and must use the real date — capping them would answer about the wrong weekday.
+
+    The ages are monotone. `competition_open_age_months` grows without bound, so a date
+    years past the window supplies a value beyond every split point the trees were built
+    from, and beyond the range any linear coefficient was fitted over. Left alone it is
+    silent extrapolation on a feature carrying about a sixth of the deployed model's
+    importance. Capped at the last fitted day it is the honest reading: *as far as this
+    model can tell, this store's competitor has been open the longest it ever observed.*
+
+    `is_promo2_month` is cyclic like the calendar, so it keeps the real date too.
     """
     frame = frame.copy()
     if stores is None:
@@ -105,11 +127,12 @@ def add_store_features(frame: pd.DataFrame, stores: pd.DataFrame | None) -> pd.D
     frame = frame.merge(metadata, on=s.ENTITY, how="left", suffixes=("", "_store"))
 
     dates = pd.to_datetime(frame[s.DATE])
+    aged = dates if age_as_of is None else _capped(dates, pd.Timestamp(age_as_of))
     frame["competition_open_age_months"] = _age_in_months(
-        dates, frame.get(s.COMPETITION_OPEN_YEAR), frame.get(s.COMPETITION_OPEN_MONTH)
+        aged, frame.get(s.COMPETITION_OPEN_YEAR), frame.get(s.COMPETITION_OPEN_MONTH)
     )
     frame["promo2_age_weeks"] = _age_in_weeks(
-        dates, frame.get(s.PROMO2_SINCE_YEAR), frame.get(s.PROMO2_SINCE_WEEK)
+        aged, frame.get(s.PROMO2_SINCE_YEAR), frame.get(s.PROMO2_SINCE_WEEK)
     )
     frame["is_promo2_month"] = _is_promo2_month(dates, frame.get(s.PROMO_INTERVAL))
 
@@ -121,6 +144,15 @@ def add_store_features(frame: pd.DataFrame, stores: pd.DataFrame | None) -> pd.D
 
 def _absent_value(column: str) -> str | int:
     return UNKNOWN if column in LABEL_VOCABULARIES else 0
+
+
+def _capped(dates: pd.Series, ceiling: pd.Timestamp) -> pd.Series:
+    """`dates` with anything after `ceiling` pulled back to it.
+
+    `Series.clip(upper=...)` does this too, but its stubs do not admit a `Timestamp`, and
+    silencing that would hide a real class of mistake at every other call site.
+    """
+    return dates.mask(dates > ceiling, ceiling)
 
 
 def _age_in_months(
@@ -202,10 +234,15 @@ def build(
     stores: pd.DataFrame | None,
     *,
     encoders: dict[str, LabelEncoder] | None = None,
+    age_as_of: pd.Timestamp | None = None,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
-    """Sales rows plus optional metadata in, model-ready frame out."""
+    """Sales rows plus optional metadata in, model-ready frame out.
+
+    `age_as_of` is a serving concern only — see `add_store_features`. Training leaves it
+    unset, so the frame the models are fitted on is unchanged by its existence.
+    """
     frame = add_calendar_features(sales)
-    frame = add_store_features(frame, stores)
+    frame = add_store_features(frame, stores, age_as_of=age_as_of)
     frame[ENTITY_CODE] = _entity_codes(frame[s.ENTITY])
     frame, encoders = encode_labels(frame, encoders=encoders)
 

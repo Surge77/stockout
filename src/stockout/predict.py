@@ -16,11 +16,12 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import features, targets
+from . import features, targets, window
 from .data import schemas as s
 from .errors import StockoutError
 from .persistence import Artifact
 from .registry import model_names
+from .window import DateStatus
 
 #: A serving row has no sales yet. The column has to exist for the feature builder, and
 #: nothing reads it — every feature is built from the calendar and the store metadata.
@@ -38,17 +39,42 @@ class Prediction:
     thresholds: tuple[float, float]
     per_model: dict[str, float] = field(default_factory=dict)
 
+    #: Whether a true figure for this store-day exists in the data behind the models.
+    #: `None` where the artefact predates the field and the window is unknown. Carried on
+    #: the answer rather than worked out by each caller, because the two regions mean
+    #: different things and a surface that shows the same wording for both is misleading:
+    #: inside the window the prediction can be checked against an actual, outside it the
+    #: prediction is the only thing there is.
+    status: DateStatus | None = None
+
     def threshold_text(self) -> str:
         low, high = self.thresholds
         return f"Low <{low:,.0f} | Medium {low:,.0f}-{high:,.0f} | High >{high:,.0f}"
 
     def lines(self) -> list[str]:
-        return [
+        out = [
             f"{self.entity} on {self.date:%Y-%m-%d}",
             f"  Predicted sales   {self.sales:,.0f}",
             f"  Demand class      {self.demand_class}",
             f"  cut points        {self.threshold_text()}",
         ]
+        caveat = self.status.caveat() if self.status else None
+        if caveat:
+            out.append(f"  forecast          {caveat}")
+        return out
+
+
+def date_status(artifact: Artifact, date: str | pd.Timestamp) -> DateStatus | None:
+    """Classify a request date against the artefact's window, or `None` if it has none.
+
+    An artefact written before `observed_from` existed carries neither bound, and the only
+    honest thing to do with it is what this package did before: answer without a claim
+    either way. The version check in `persistence.load` refuses such a file outright, so
+    in practice this returns `None` only for an `Artifact` built by hand in a test.
+    """
+    if artifact.observed_from is None or artifact.observed_through is None:
+        return None
+    return window.check(date, artifact.observed_from, artifact.observed_through)
 
 
 def serving_row(
@@ -68,9 +94,8 @@ def serving_row(
             f"{len(artifact.entities):,} of them"
         )
 
-    stamp = pd.to_datetime(date)
-    if pd.isna(stamp):
-        raise StockoutError(f"{date!r} is not a date")
+    status = date_status(artifact, date)
+    stamp = status.stamp if status else window.parse(date)
 
     row = pd.DataFrame(
         [
@@ -85,7 +110,12 @@ def serving_row(
             }
         ]
     )
-    built, _ = features.build(row, artifact.stores, encoders=artifact.encoders)
+    built, _ = features.build(
+        row,
+        artifact.stores,
+        encoders=artifact.encoders,
+        age_as_of=artifact.observed_through,
+    )
 
     missing = [c for c in artifact.feature_columns if c not in built.columns]
     if missing:
@@ -113,18 +143,55 @@ def predict(
         school_holiday=school_holiday,
     )
 
-    sales = float(artifact.regressor.predict(matrix)[0])
-    demand = str(artifact.classifier.predict(matrix)[0])
     entity = str(entity)
+    # The regressor answers in residuals when the artefact carries trends, so the store's
+    # line goes back under it here. This is the whole of what lets a date past the data
+    # differ from the same kind of day inside it — the tree returns the same leaf for
+    # both, and only the line knows that the store is bigger by then.
+    sales = _with_trend(artifact, float(artifact.regressor.predict(matrix)[0]), entity, date)
+    demand = str(artifact.classifier.predict(matrix)[0])
 
     return Prediction(
         entity=entity,
         date=pd.to_datetime(date),
         sales=sales,
         demand_class=demand,
-        thresholds=artifact.thresholds.for_entity(entity),
+        thresholds=_thresholds_at(artifact, entity, date),
         per_model=_every_regressor(artifact, matrix) if all_models else {},
+        status=date_status(artifact, date),
     )
+
+
+def _thresholds_at(
+    artifact: Artifact, entity: str, date: str | pd.Timestamp
+) -> tuple[float, float]:
+    """This store's demand cut points, in sales for the day being asked about.
+
+    On a de-trended artefact the stored cut points are residuals — distances from the
+    store's line — so they come out negative and mean nothing beside a sales figure. The
+    panel printed `Low <-587` next to a prediction of 4,103, which is not a bug in the
+    model but is certainly a lie to the reader.
+
+    Shifting them onto the line at the requested date puts both back in the same units and
+    restores what the pair is for: *this is the prediction, and here is where Low, Medium
+    and High sit for this shop on this day*. The band therefore rises as the store grows,
+    which is exactly the behaviour asked for when the class was defined relative to the
+    store's current level rather than to an absolute figure fixed in 2015.
+    """
+    low, high = artifact.thresholds.for_entity(entity)
+    if artifact.trends is None:
+        return low, high
+    level = artifact.trends.level_at(entity, pd.Timestamp(pd.to_datetime(date)))
+    return low + level, high + level
+
+
+def _with_trend(
+    artifact: Artifact, residual: float, entity: str, date: str | pd.Timestamp
+) -> float:
+    """Add the store's fitted level back to a residual, if this artefact has lines."""
+    if artifact.trends is None:
+        return residual
+    return residual + artifact.trends.level_at(entity, pd.Timestamp(pd.to_datetime(date)))
 
 
 def _every_regressor(artifact: Artifact, matrix: pd.DataFrame) -> dict[str, float]:
@@ -155,7 +222,12 @@ def compare_row(
     for name in model_names("regression"):
         model = fitted.get(name)
         if model is not None:
-            answers[name] = float(model.predict(matrix)[0])  # type: ignore[attr-defined]
+            # These are fitted through the same de-trended split as the deployed model,
+            # so they answer in residuals too. Shown raw they would put a number near
+            # zero beside a sales figure and look like a broken model rather than a
+            # missing addition.
+            residual = float(model.predict(matrix)[0])  # type: ignore[attr-defined]
+            answers[name] = _with_trend(artifact, residual, str(entity), date)
     return answers
 
 

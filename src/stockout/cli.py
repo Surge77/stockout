@@ -16,11 +16,12 @@ from .commands import (
     run_datasets,
     run_describe,
     run_fetch,
+    run_leakage,
     run_models,
     run_predict,
     run_train,
 )
-from .config import RANDOM_SEED, TEST_SIZE
+from .config import DEFAULT_SPLIT, DETREND, RANDOM_SEED, TEST_SIZE
 from .data.adapters import SOURCE_NAMES
 from .errors import StockoutError
 from .registry import TASK_NAMES, model_names
@@ -46,6 +47,20 @@ def _add_data_args(parser: argparse.ArgumentParser) -> None:
 def _add_split_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--test-size", type=float, default=TEST_SIZE)
     parser.add_argument("--seed", type=int, default=RANDOM_SEED)
+    parser.add_argument(
+        "--split",
+        choices=("chronological", "shuffled"),
+        default=DEFAULT_SPLIT,
+        help="how to hold rows out; 'shuffled' is train_test_split, as taught",
+    )
+    parser.add_argument(
+        "--no-detrend",
+        dest="detrend",
+        action="store_false",
+        default=DETREND,
+        help="fit the tree on raw sales instead of on each store's distance from its "
+        "own trend line; shows what the trend was worth",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -75,6 +90,14 @@ def _parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--task", choices=TASK_NAMES, default="regression")
     _add_split_args(p_compare)
     p_compare.set_defaults(handler=run_compare)
+
+    p_leakage = sub.add_parser(
+        "leakage", help="what the shuffled split adds to each score, in points"
+    )
+    _add_data_args(p_leakage)
+    p_leakage.add_argument("--task", choices=TASK_NAMES, default="regression")
+    _add_split_args(p_leakage)
+    p_leakage.set_defaults(handler=run_leakage)
 
     p_train = sub.add_parser("train", help="fit both models and save one artefact")
     _add_data_args(p_train)

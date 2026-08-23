@@ -3,34 +3,30 @@
 The generator is not trying to be realistic. It is trying to reproduce the four
 structures that make the real problem hard, and nothing else:
 
-1. Weekly seasonality strong enough that same-weekday-last-week is a serious
-   baseline. If the synthetic data lacked it, `SeasonalNaive` would look bad here
-   and good on Rossmann, and the test suite would be lying.
-2. Sunday closures, so the open=0 -> sales=0 invariant is exercised.
+1. Weekly seasonality wide enough to dominate the noise, so a model that finds the
+   weekday effect scores visibly better than one that does not.
+2. Sunday and Christmas closures, so the open=0 -> sales=0 invariant is exercised.
 3. A refurbishment gap — one store's rows *vanish* for a quarter and come back. Note
    that this is absence, not a run of zeros: Rossmann's refurbished stores are simply
    missing from the file, and code that assumes a contiguous calendar per store breaks
-   on them. `validate.calendar_gaps` exists to find exactly this.
+   on them.
 4. A level shift, so a model that assumes stationarity is visibly punished.
 5. **Autocorrelated residuals.** What is left after the calendar is explained is not
    independent day to day: weather, local events and footfall trends persist for a few
    days at a time. This one was added last and for a specific reason — without it the
    generator cannot demonstrate leakage *of any kind*.
 
-   The argument is short and worth keeping. Every leak — a shuffled split, a lag shorter
-   than the horizon, a rolling window that includes its own target — works by letting a
-   model see a neighbouring observation that is informative about the one it is
-   predicting. If the only unpredictable component is i.i.d. noise then no neighbour is
-   informative, the leak transmits nothing, and `evaluate/leakage.py` measures four arms
-   that all score the same. That was measured, not assumed: with i.i.d. noise even a
-   3-nearest-neighbour model given `lag_1` under a shuffled split showed an optimism of
-   -0.005, which is to say none.
+   The argument is short and worth keeping. A leak works by letting a model see a
+   neighbouring observation that is informative about the one it is predicting. If the
+   only unpredictable component is i.i.d. noise then no neighbour is informative, the
+   leak transmits nothing, and both arms of an experiment score the same — so the
+   experiment cannot tell a good split from a bad one.
 
    So the residual is an AR(1) process. Its correlation at one day is `_NOISE_RHO` and at
-   seven days is `_NOISE_RHO ** 7`, which is near zero — meaning the honest features
-   (lags of at least the horizon) gain almost nothing from it, while `lag_1` gains a lot.
-   That gap is precisely the thing `features/lags.py` exists to prevent, and now it can
-   be shown rather than asserted.
+   seven days is `_NOISE_RHO ** 7`, which is near zero. Calendar-adjacent rows are
+   therefore worth something and week-apart rows are not, which is exactly the asymmetry
+   a shuffled split exploits and a chronological one does not. `stockout.leakage` measures
+   that gap; this structure is why there is anything there to measure.
 """
 
 from __future__ import annotations
@@ -53,6 +49,45 @@ _PROMO_LIFT = 1.27
 _ANNUAL_AMPLITUDE = 0.12
 _NOISE_SD = 0.08
 _AVG_BASKET = 9.5
+
+#: How a store's own attributes set the level it trades at.
+#:
+#: This used to be `rng.integers(3_500, 9_000)` — a store's size drawn at random, in a
+#: different function from the one that generated its metadata. Nothing tied an attribute
+#: to the level it was supposed to explain, and it showed: `competition_distance`
+#: correlated with mean sales at r = -0.13 and assortment moved the mean by 8%, both
+#: indistinguishable from noise. A model could only learn a store's level by memorising
+#: *which store it was*, `entity_code` alone reached r² 0.49, and holding out a whole
+#: store gave r² -0.70 — worse than guessing that store's own average.
+#:
+#: That is what made the package behave like a lookup table rather than a model. The
+#: factors below give the metadata real explanatory power, in the direction retail
+#: actually works: a wider range sells more, a competitor next door hurts, and the
+#: continuing promotion helps a little.
+_BASE_LEVEL = 6_000.0
+
+#: Rossmann's documented assortment codes: basic, extra, extended. More range, more sales.
+_ASSORTMENT_FACTOR: dict[str, float] = {"a": 0.85, "b": 1.00, "c": 1.22}
+
+#: Store type is anonymised in the real data, so these are arbitrary but *consistent* —
+#: the point is that the column carries signal, not that b means anything in particular.
+_STORE_TYPE_FACTOR: dict[str, float] = {"a": 1.12, "b": 0.94, "c": 1.00, "d": 0.90}
+
+_PROMO2_FACTOR = 1.08
+
+#: Competition is felt on a log scale and saturates: the difference between 50 m and
+#: 500 m matters, the difference between 40 km and 50 km does not. Distances are measured
+#: against a 3 km pivot, and the effect is bounded so no single store is destroyed by it.
+_COMPETITION_PIVOT_M = 3_000.0
+_COMPETITION_SENSITIVITY = 0.16
+_COMPETITION_MIN_FACTOR = 0.78
+_COMPETITION_MAX_FACTOR = 1.22
+
+#: What the attributes do **not** explain: location, management, passing trade. Kept
+#: deliberately — without it the metadata would determine the level exactly, a held-out
+#: store would score as well as a seen one, and the split between "predict a shop I know"
+#: and "predict a shop I have never seen" would stop being a real distinction.
+_UNEXPLAINED_SD = 0.10
 
 #: Day-to-day persistence of the residual. 0.7 makes yesterday genuinely informative
 #: about today — correlation 0.7 at one day — while leaving a week-old value nearly
@@ -79,17 +114,27 @@ def make_sales(
     start: str = "2013-01-01",
     days: int = 730,
     seed: int = 7,
+    stores: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Build a sales frame with the canonical schema.
 
     Deterministic: the same `seed`, `n_stores`, `start` and `days` always produce a
     byte-identical frame. `scripts/make_sample.py` relies on that to regenerate the
     committed sample without producing a spurious diff.
+
+    `stores` is the metadata frame the levels are derived from. Passing the same frame
+    that gets written beside the sales file is what keeps the two consistent; omitting it
+    regenerates the equivalent frame from the same seed.
     """
     if n_stores < 1:
         raise ValueError("n_stores must be at least 1")
     if days < 1:
         raise ValueError("days must be at least 1")
+
+    if stores is None:
+        from .synth_stores import make_stores
+
+        stores = make_stores(n_stores=n_stores, seed=seed)
 
     rng = np.random.default_rng(seed)
     dates = pd.date_range(start=start, periods=days, freq="D")
@@ -110,10 +155,12 @@ def make_sales(
     annual = 1.0 + _ANNUAL_AMPLITUDE * np.sin(2 * np.pi * day_index / 365.25)
     dow_factor = np.array([_DOW_MULTIPLIER[d] for d in dow])
 
+    levels = _store_levels(stores, n_stores, rng)
+
     frames = []
     for offset in range(n_stores):
         store_id = offset + 1
-        base = float(rng.integers(3_500, 9_000))
+        base = levels[offset]
 
         level = np.full(days, base)
         if offset == _SHIFT_STORE_INDEX:
@@ -158,6 +205,59 @@ def make_sales(
 
     out = pd.concat(frames, ignore_index=True)
     return out.sort_values(list(s.KEY_COLUMNS)).reset_index(drop=True)
+
+
+def _store_levels(stores: pd.DataFrame, n_stores: int, rng: np.random.Generator) -> list[float]:
+    """The everyday trading level of each store, derived from its own metadata.
+
+    One multiplicative factor per attribute, times an unexplained store effect. Returned
+    in store-id order so `levels[offset]` belongs to store `offset + 1`.
+    """
+    indexed = stores.set_index(s.STORE)
+    levels: list[float] = []
+
+    for offset in range(n_stores):
+        row = indexed.loc[offset + 1]
+        level = (
+            _BASE_LEVEL
+            * _ASSORTMENT_FACTOR.get(str(row[s.ASSORTMENT]).lower(), 1.0)
+            * _STORE_TYPE_FACTOR.get(str(row[s.STORE_TYPE]).lower(), 1.0)
+            * _competition_factor(row[s.COMPETITION_DISTANCE])
+            * (_PROMO2_FACTOR if _truthy(row[s.PROMO2]) else 1.0)
+            * float(rng.lognormal(0.0, _UNEXPLAINED_SD))
+        )
+        levels.append(float(level))
+    return levels
+
+
+def _truthy(value: object) -> bool:
+    """`1`/`0` out of a pandas row, without tripping over NA."""
+    try:
+        return bool(int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
+
+def _competition_factor(distance_m: object) -> float:
+    """How much a nearby competitor costs this store.
+
+    Log-scaled against `_COMPETITION_PIVOT_M` and bounded, because the effect saturates:
+    50 m versus 500 m matters a great deal, 40 km versus 50 km does not.
+
+    A missing distance is left neutral rather than treated as "no competitor nearby".
+    The favourable reading is the more realistic one, but `features.py` imputes this
+    column, so making absence advantageous would quietly turn the imputer into the thing
+    under test. That belongs in its own experiment, not smuggled in here.
+    """
+    try:
+        distance = float(distance_m)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1.0
+    if not np.isfinite(distance) or distance <= 0:
+        return 1.0
+
+    factor = 1.0 + _COMPETITION_SENSITIVITY * float(np.log10(distance / _COMPETITION_PIVOT_M))
+    return float(np.clip(factor, _COMPETITION_MIN_FACTOR, _COMPETITION_MAX_FACTOR))
 
 
 def _persistent_noise(rng: np.random.Generator, days: int) -> np.ndarray:

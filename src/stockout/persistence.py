@@ -34,10 +34,11 @@ import pandas as pd
 from .config import ARTIFACT_DIR, MODEL_PATH, Task
 from .errors import StockoutError
 from .targets import DemandThresholds
+from .trend import StoreTrends
 
 #: Bumped whenever the artefact's shape changes. An old file read by new code is a worse
 #: failure than a refusal, because it usually half-works.
-ARTIFACT_VERSION = 3
+ARTIFACT_VERSION = 6
 
 
 @dataclass
@@ -58,6 +59,32 @@ class Artifact:
     scores: dict[str, dict[str, float]]
     n_train: int
     n_test: int
+
+    #: A second regressor, fitted on every feature **except** `entity_code`, for
+    #: answering about a store the fit has never seen. The deployed regressor cannot do
+    #: that job: `entity_code` is one of its inputs, so a store it does not recognise has
+    #: no valid value to supply. Two questions, two models.
+    cold_regressor: Any = None
+    cold_feature_columns: list[str] = field(default_factory=list)
+    cold_scores: dict[str, float] = field(default_factory=dict)
+
+    #: The span of the dataset this was built from — the dates for which a true figure
+    #: exists. Deliberately the dataset's range and not the training split's: the question
+    #: these answer is "is there an actual to compare against", which is a property of the
+    #: data, not of the fold. They travel because serving needs them and cannot recover
+    #: them, the artefact holding models and metadata but never the sales frame.
+    #:
+    #: `window.check` classifies a request against this pair, and `serving_row` caps the
+    #: monotone store-age features at `observed_through` so a date past the end does not
+    #: quietly feed the model a value beyond every split point it was built from.
+    observed_from: pd.Timestamp | None = None
+    observed_through: pd.Timestamp | None = None
+
+    #: The per-store lines the regressor's target was measured against. Without these the
+    #: saved model is unusable: it predicts a *residual*, and a residual with no line under
+    #: it is not a sales figure. They are also the only part of the artefact that can
+    #: answer a date past the data, the tree having no way to reach a level it never saw.
+    trends: StoreTrends | None = None
     version: int = ARTIFACT_VERSION
     trained_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 

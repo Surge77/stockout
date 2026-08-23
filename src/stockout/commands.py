@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import targets
+from . import leakage, targets
 from .config import MODEL_PATH, Task
 from .data.adapters import SOURCES, available
 from .datasets import describe, prepare, summary_line
@@ -61,11 +61,20 @@ def run_models(args: argparse.Namespace) -> int:
 def run_compare(args: argparse.Namespace) -> int:
     prepared = prepare(args.dataset)
     task: Task = args.task
-    results = compare(prepared, task, test_size=args.test_size, seed=args.seed)
-    data = split(prepared, task, test_size=args.test_size, seed=args.seed)
+    results = compare(
+        prepared, task, test_size=args.test_size, seed=args.seed,
+        strategy=args.split, detrend=args.detrend,
+    )
+    data = split(
+        prepared, task, test_size=args.test_size, seed=args.seed,
+        strategy=args.split, detrend=args.detrend,
+    )
 
     print(f"{summary_line(prepared)}")
-    print(f"{task} | {len(results)} models | {len(data.X_test):,} held-out rows")
+    trend_note = "per-store trend removed" if args.detrend else "raw sales, no trend term"
+    print(
+        f"{task} | {len(results)} models | {len(data.X_test):,} held-out rows | {trend_note}"
+    )
     if task == "classification":
         print(f"floor: {baseline_accuracy(data.Y_test):.1%} (always guess the commonest class)")
     print()
@@ -119,3 +128,21 @@ __all__ = [
     "run_predict",
     "run_train",
 ]
+
+
+def run_leakage(args: argparse.Namespace) -> int:
+    """Score every model under both splits and print the gap between them.
+
+    The number to read is the last line. It is the largest amount any model gained purely
+    from being handed calendar-adjacent rows, and it is the correction that has to be
+    applied in your head to any figure produced with `--split shuffled`.
+    """
+    prepared = prepare(args.dataset)
+    task: Task = args.task
+    results = leakage.measure(prepared, task, test_size=args.test_size, seed=args.seed)
+
+    print(summary_line(prepared))
+    print(f"{task} | {len(results)} models | shuffled vs chronological, same rows and seed")
+    print()
+    print(leakage.summary(results))
+    return 0
