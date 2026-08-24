@@ -141,7 +141,11 @@ class ModelService:
             school_holiday=school_holiday,
         )
         answer.per_model = self._every_model(
-            entity=entity, date=date, promo=promo, school_holiday=school_holiday
+            entity=entity,
+            date=date,
+            promo=promo,
+            state_holiday=state_holiday,
+            school_holiday=school_holiday,
         )
         return answer
 
@@ -193,13 +197,27 @@ class ModelService:
         )
 
     def _every_model(
-        self, *, entity: str, date: str, promo: bool, school_holiday: bool
+        self,
+        *,
+        entity: str,
+        date: str,
+        promo: bool,
+        state_holiday: str,
+        school_holiday: bool,
     ) -> dict[str, float]:
+        """Every other regressor on the same row.
+
+        `state_holiday` is threaded through because it was silently defaulting to `"0"`
+        here: the comparison list was answering an ordinary day while the headline above
+        it answered the holiday the visitor asked for, and the two were displayed as
+        disagreeing models rather than as two different questions.
+        """
         matrix = serving_row(
             self.artifact,
             entity=entity,
             date=date,
             promo=promo,
+            state_holiday=state_holiday,
             school_holiday=school_holiday,
         )
         return {

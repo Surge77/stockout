@@ -90,11 +90,22 @@
   </div>
 
   <h3>The day itself &mdash; each one is a model input, not a display setting</h3>
-  <div class="field checks">
-    <label class="check"><input type="checkbox" name="promo2" value="true" {% if promo2 %}checked{% endif %}> Runs the continuing promotion</label>
-    <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion that day</label>
-    <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
-    <label class="check"><input type="checkbox" name="state_holiday" value="true" {% if state_holiday %}checked{% endif %}> Public holiday</label>
+  <div class="field-row">
+    <div class="field">
+      <label for="state_holiday">Kind of day</label>
+      <select id="state_holiday" name="state_holiday">
+        {% for code, label in state_holidays %}
+          <option value="{{ code }}" {% if code == state_holiday|default('0') %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <small>The source separates these three, and so does the model behind this page.</small>
+    </div>
+
+    <div class="field checks">
+      <label class="check"><input type="checkbox" name="promo2" value="true" {% if promo2 %}checked{% endif %}> Runs the continuing promotion</label>
+      <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion that day</label>
+      <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
+    </div>
   </div>
 
   <button type="submit">Estimate</button>

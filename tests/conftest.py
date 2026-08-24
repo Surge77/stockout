@@ -35,6 +35,11 @@ class _StubService:
         n_test: int = 2
         entities: list[str] = field(default_factory=lambda: ["1"])
         thresholds: dict[str, tuple[float, float]] = field(default_factory=dict)
+        #: What the described-shop page reports about the model it uses. Empty here —
+        #: the page renders the absence as "not measured", which is a state it has to
+        #: handle anyway.
+        cold_scores: dict[str, float] = field(default_factory=dict)
+        cold_feature_columns: list[str] = field(default_factory=list)
         scores: dict[str, dict[str, float]] = field(
             default_factory=lambda: {
                 "regression": {"r2": 0.5},

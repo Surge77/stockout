@@ -25,6 +25,37 @@ router = APIRouter()
 
 MAX_COMPARISON_MODELS = 12
 
+#: The kinds of day the source distinguishes, offered in the order they read.
+#:
+#: These meanings are the competition's own, published beside the data, so naming them
+#: is not the invention that section 6 of TODO.md forbids for the shop grouping.
+#:
+#: This was a checkbox, which collapsed all three holidays onto `a`. Christmas trades
+#: nothing like an ordinary bank holiday and the fitted models already carry the
+#: distinction — the form was the only place it was being thrown away.
+STATE_HOLIDAYS: tuple[tuple[str, str], ...] = (
+    ("0", "An ordinary trading day"),
+    ("a", "Public holiday"),
+    ("b", "Easter holiday"),
+    ("c", "Christmas"),
+)
+
+_HOLIDAY_CODES = frozenset(code for code, _ in STATE_HOLIDAYS)
+
+
+def _holiday_code(raw: str) -> str:
+    """The submitted kind of day, or a refusal.
+
+    A `<select>` constrains a browser, not a request. Without this an unrecognised code
+    would travel to `features.LABEL_VOCABULARIES`, be folded into `UNKNOWN`, and come
+    back as a confident prediction for a day nobody described.
+    """
+    code = raw.strip().lower()
+    if code not in _HOLIDAY_CODES:
+        offered = ", ".join(repr(known) for known, _ in STATE_HOLIDAYS)
+        raise StockoutError(f"{raw!r} is not a kind of day; expected one of {offered}")
+    return code
+
 
 def _service(request: Request) -> ModelService:
     """The one instance, built at startup and kept on the app."""
@@ -41,6 +72,7 @@ def _context(request: Request) -> dict[str, object]:
         # of shop it is and what an ordinary day there looks like, which is the context
         # every number further down the page is relative to.
         "options": service.store_options(),
+        "state_holidays": STATE_HOLIDAYS,
         "entity_label": service.entity_label(),
         "date_min": start,
         # The last day with a true figure. No longer the picker's `max` — the input is
@@ -67,7 +99,7 @@ async def make_forecast(
     date: Annotated[str, Form()],
     promo: Annotated[bool, Form()] = False,
     school_holiday: Annotated[bool, Form()] = False,
-    state_holiday: Annotated[bool, Form()] = False,
+    state_holiday: Annotated[str, Form()] = "0",
 ) -> HTMLResponse:
     """Answer one store-day with both models, or explain why it cannot be answered."""
     context = _context(request)
@@ -90,8 +122,7 @@ async def make_forecast(
             date=date,
             promo=promo,
             school_holiday=school_holiday,
-            # Rossmann codes a public holiday as "a"; the form asks a yes/no question.
-            state_holiday="a" if state_holiday else "0",
+            state_holiday=_holiday_code(state_holiday),
         )
     except StockoutError as exc:
         context["error"] = str(exc)
@@ -156,6 +187,7 @@ def _whatif_context(request: Request) -> dict[str, object]:
     return {
         "store_types": STORE_TYPES,
         "assortments": ASSORTMENTS,
+        "state_holidays": STATE_HOLIDAYS,
         "date_min": start,
         "observed_through": end,
         "unseen_r2": service.artifact.cold_scores.get("unseen_store_r2"),
@@ -179,7 +211,7 @@ async def whatif(
     promo2: Annotated[bool, Form()] = False,
     date: Annotated[str, Form()] = "",
     promo: Annotated[bool, Form()] = False,
-    state_holiday: Annotated[bool, Form()] = False,
+    state_holiday: Annotated[str, Form()] = "0",
     school_holiday: Annotated[bool, Form()] = False,
 ) -> HTMLResponse:
     """Answer for a described shop, with what each attribute was worth."""
@@ -199,8 +231,7 @@ async def whatif(
             promo2=promo2,
             date=date,
             promo=promo,
-            # Rossmann codes a public holiday as "a"; the form asks a yes/no question.
-            state_holiday="a" if state_holiday else "0",
+            state_holiday=_holiday_code(state_holiday),
             school_holiday=school_holiday,
         )
     except StockoutError as exc:

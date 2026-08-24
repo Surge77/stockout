@@ -54,21 +54,38 @@
     </small>
   </div>
 
-  <div class="field">
-    <label for="date">Date</label>
-    <input type="date" id="date" name="date" required
-           value="{{ date or observed_through }}" min="{{ date_min }}">
-    <small>
-      Data runs to <code>{{ observed_through }}</code>; up to there the true figure is shown
-      beside the prediction. Later dates are answered as forecasts. Earlier than
-      <code>{{ date_min }}</code> is refused — there is nothing behind it.
-    </small>
+  {# Side by side where there is room. The shop selector keeps the full width because its
+     options are sentences; a date and a four-item list do not need it. #}
+  <div class="field-row">
+    <div class="field">
+      <label for="date">Date</label>
+      <input type="date" id="date" name="date" required
+             value="{{ date or observed_through }}" min="{{ date_min }}">
+      <small>
+        Data runs to <code>{{ observed_through }}</code>; up to there the true figure is shown
+        beside the prediction. Later dates are answered as forecasts. Earlier than
+        <code>{{ date_min }}</code> is refused — there is nothing behind it.
+      </small>
+    </div>
+
+    <div class="field">
+      <label for="state_holiday">Kind of day</label>
+      <select id="state_holiday" name="state_holiday">
+        {% for code, label in state_holidays %}
+          <option value="{{ code }}" {% if code == state_holiday|default('0') %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <small>
+        The source separates these three, and so do the models. Christmas trades nothing
+        like an ordinary bank holiday, so answering &ldquo;a holiday&rdquo; and leaving it
+        there would throw away the part that matters most.
+      </small>
+    </div>
   </div>
 
   <div class="field checks">
     <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion running</label>
     <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
-    <label class="check"><input type="checkbox" name="state_holiday" value="true" {% if state_holiday %}checked{% endif %}> Public holiday</label>
   </div>
 
   <button type="submit">Predict</button>
