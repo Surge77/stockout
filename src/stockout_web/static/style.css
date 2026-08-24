@@ -12,6 +12,12 @@
   --warn: #b03a2e;
   --warn-soft: #fbeae7;
   --radius: 10px;
+  /* The width of the reading column. Three rules have to agree on it — the column
+     itself, the header's padding, and the footer — and they were three copies of
+     the same literal, so widening the forms meant changing it in three places and
+     hoping. 1040px left a third of a laptop screen empty beside an eight-field
+     form; prose is held narrower than this by its own `ch` limits. */
+  --column: 1240px;
 }
 
 * { box-sizing: border-box; }
@@ -23,7 +29,7 @@ body {
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-main { max-width: 1040px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+main { max-width: var(--column); margin: 0 auto; padding: 1.5rem 1rem 3rem; }
 
 h1 { font-size: 1.6rem; margin: 0 0 .35rem; }
 h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
@@ -42,7 +48,7 @@ h3 { font-size: .95rem; margin: 1.25rem 0 .5rem; color: var(--muted); }
   /* The rule spans the window, the contents line up with `main`'s centred column.
      Without this the brand sat hard against the left edge while every heading below it
      started a couple of hundred pixels in. */
-  padding: .75rem max(1.25rem, calc((100% - 1040px) / 2 + 1rem));
+  padding: .75rem max(1.25rem, calc((100% - var(--column)) / 2 + 1rem));
 }
 .brand { font-weight: 700; text-decoration: none; color: var(--ink); letter-spacing: -.02em; }
 .bar nav { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
@@ -84,11 +90,11 @@ h3 { font-size: .95rem; margin: 1.25rem 0 .5rem; color: var(--muted); }
 .card.narrow { max-width: 26rem; }
 
 /* The sign-in and register pages. One card, centred in the window rather than pinned to
-   the top-left of a 1040px column with two thirds of the screen empty beside it. */
+   the top-left of the reading column with two thirds of the screen empty beside it. */
 .auth { min-height: calc(100vh - 16rem); display: grid; place-items: center; }
 .auth .card { width: 100%; max-width: 27rem; margin: 0; }
 /* The footer follows its page. Content pages are left-aligned and so is their footer;
-   the auth pages centre one card, and a footnote pinned to the far left of a 1040px
+   the auth pages centre one card, and a footnote pinned to the far left of the
    column under a centred card reads as a misalignment rather than as a footnote.
    Held to the card's own width so the line breaks where the card does. */
 .auth-page footer { text-align: center; max-width: 34rem; }
@@ -100,7 +106,7 @@ h3 { font-size: .95rem; margin: 1.25rem 0 .5rem; color: var(--muted); }
 .scroll { overflow-x: auto; }
 
 footer {
-  max-width: 1040px; margin: 0 auto; padding: 0 1rem 2rem;
+  max-width: var(--column); margin: 0 auto; padding: 0 1rem 2rem;
   color: var(--muted); font-size: .82rem;
 }
 
