@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -19,6 +20,23 @@ from stockout_web import config
 from stockout_web.presentation import StoreProfile
 
 GOOD_PASSWORD = "correct-horse-battery"
+
+_REGRESSION_ROWS = pd.DataFrame(
+    [
+        {"model": "linear", "r2": 0.5512, "mse": 1_200_000.0, "fit_seconds": 0.12,
+         "n_fit": 10, "taught": "yes"},
+        {"model": "decision_tree", "r2": 0.8296, "mse": 400_000.0, "fit_seconds": 1.40,
+         "n_fit": 10, "taught": "no"},
+    ]
+)
+_CLASSIFICATION_ROWS = pd.DataFrame(
+    [
+        {"model": "logistic", "accuracy": 0.5120, "fit_seconds": 0.20,
+         "n_fit": 10, "taught": "yes"},
+        {"model": "decision_tree", "accuracy": 0.6649, "fit_seconds": 0.90,
+         "n_fit": 10, "taught": "no"},
+    ]
+)
 
 
 class _StubService:
@@ -85,9 +103,15 @@ class _StubService:
     def cards(self) -> list[dict[str, object]]:
         return []
 
-    async def comparison_tables(self) -> tuple[None, None, float]:
-        """Startup warms this in the background; the stub answers instantly."""
-        return None, None, 0.0
+    async def comparison_tables(self) -> tuple[pd.DataFrame, pd.DataFrame, float]:
+        """Startup warms this in the background; the stub answers instantly.
+
+        Shaped like `evaluate.compare` output, `taught` column included. Two rows are
+        enough to render the page, and keeping the column the library really reports is
+        the point: the page has to drop it, and a stub that never supplied it would let a
+        broken page pass.
+        """
+        return _REGRESSION_ROWS, _CLASSIFICATION_ROWS, 0.37
 
 
 @pytest.fixture

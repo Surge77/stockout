@@ -2,8 +2,8 @@
 {% block title %}Comparison — stockout{% endblock %}
 
 {% macro table(rows, metric, metric_label) %}
-{# The `.scroll` wrapper the `<pre>` below already had. Without it a four-column table
-   pushes the whole page sideways on a phone instead of scrolling inside its own card. #}
+{# The `.scroll` wrapper the `<pre>` below already had. Without it a wide table pushes the
+   whole page sideways on a phone instead of scrolling inside its own card. #}
 <div class="scroll">
 <table class="results">
   <thead>
@@ -11,7 +11,6 @@
       <th>Model</th>
       <th class="num">{{ metric_label }}</th>
       <th class="num">Fit (s)</th>
-      <th>In the course material</th>
     </tr>
   </thead>
   <tbody>
@@ -20,7 +19,6 @@
       <td>{{ row.model|replace('_', ' ') }}</td>
       <td class="num">{{ '{:,.4f}'.format(row[metric]) }}</td>
       <td class="num">{{ '{:,.2f}'.format(row.fit_seconds) }}</td>
-      <td>{% if row.taught == 'yes' %}yes{% else %}<span class="tag warn">no</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

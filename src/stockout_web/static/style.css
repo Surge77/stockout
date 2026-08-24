@@ -317,11 +317,6 @@ caption { caption-side: top; text-align: left; color: var(--muted); font-size: .
 
 .warn { color: var(--warn); }
 
-/* `comparison.html` marks untaught models with `<span class="tag warn">`. `.tag` paints a
-   green accent background and `.warn` only recolours the text, so the badge came out red
-   on pale green. Set both together. */
-.tag.warn { background: var(--warn-soft); color: var(--warn); }
-
 /* --- messages ---------------------------------------------------------------- */
 
 .alert { border-radius: 8px; padding: .7rem .9rem; margin: 0 0 1rem; font-size: .9rem; }

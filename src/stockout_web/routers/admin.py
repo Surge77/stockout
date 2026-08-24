@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Annotated, Literal
 
+import pandas as pd
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
@@ -78,11 +79,31 @@ async def retrain(
     return page(request, "admin.html", context)
 
 
+#: Columns `evaluate.compare` reports that this page does not show.
+#:
+#: `taught` says whether an estimator appears in the course notebooks. That governs what
+#: may be added to this repository — `scripts/check_taught.py` still enforces it, and the
+#: CLI and README still report it — but the page asks which model predicts sales best, and
+#: where an estimator was learnt has no bearing on that.
+NOT_SHOWN: tuple[str, ...] = ("taught",)
+
+
+def _for_display(table: pd.DataFrame) -> pd.DataFrame:
+    """The frame as the page shows it.
+
+    Applied before both renderings. The markdown block underneath the tables prints every
+    column of whatever frame it is handed, so dropping the column in the template alone
+    would have taken it out of one place and left it in the other.
+    """
+    return table.drop(columns=[column for column in NOT_SHOWN if column in table.columns])
+
+
 @router.get("/comparison", response_class=HTMLResponse)
 async def comparison(request: Request, admin: AdminUser) -> HTMLResponse:
     """Every registered model on one split, for both tasks."""
     service = _service(request)
     regression, classification, floor = await service.comparison_tables()
+    regression, classification = _for_display(regression), _for_display(classification)
     return page(
         request,
         "comparison.html",
