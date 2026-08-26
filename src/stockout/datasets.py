@@ -34,6 +34,12 @@ class Prepared:
     source: Source
     stores: pd.DataFrame | None
 
+    #: The entity ordering `features._entity_codes` was built against, or `None` where the
+    #: ids are numeric and are their own code. Travels into the artefact because a one-row
+    #: serving frame cannot recover the ordering a whole-frame fit produced — see
+    #: `features._entity_codes` for what went wrong before it did.
+    entity_vocabulary: list[str] | None = None
+
     @property
     def name(self) -> str:
         return self.source.name
@@ -72,14 +78,30 @@ def prepare(name: str, *, drop_closed: bool = True) -> Prepared:
     if sales.empty:
         raise StockoutError(f"{name} has no open days to model")
 
-    frame, encoders = features.build(sales, stores)
+    vocabulary = _vocabulary_for(sales[s.ENTITY])
+    frame, encoders = features.build(sales, stores, entity_vocabulary=vocabulary)
     return Prepared(
         frame=frame,
         feature_columns=features.feature_columns(frame),
         encoders=encoders,
         source=source,
         stores=stores,
+        entity_vocabulary=vocabulary,
     )
+
+
+def _vocabulary_for(entities: pd.Series) -> list[str] | None:
+    """The entity ordering serving will need, or `None` where the ids are their own code.
+
+    Numeric ids — Rossmann's store numbers — are returned as `None` deliberately. Routing
+    them through a vocabulary would replace store 1115's code with its position in the
+    list, renumbering every store and moving scores that are already published, to fix a
+    problem that path does not have.
+    """
+    names = entities.astype("string")
+    if not pd.to_numeric(names, errors="coerce").isna().any():
+        return None
+    return sorted(names.unique().tolist(), key=_sortable)
 
 
 def xy(prepared: Prepared, task: Task) -> tuple[pd.DataFrame, pd.Series]:

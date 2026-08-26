@@ -12,6 +12,9 @@ from typing import Final
 DATE: Final = "date"
 STORE: Final = "store"
 SALES: Final = "sales"
+#: Recorded in the training data and unknowable at the forecast origin: it is the single
+#: best predictor of `sales` and nobody knows it six weeks ahead. Never a feature, which
+#: `features.feature_columns` secures by omission — see the note on `DEMAND_CLASS`.
 CUSTOMERS: Final = "customers"
 OPEN: Final = "open"
 PROMO: Final = "promo"
@@ -19,12 +22,11 @@ STATE_HOLIDAY: Final = "state_holiday"
 SCHOOL_HOLIDAY: Final = "school_holiday"
 DAY_OF_WEEK: Final = "day_of_week"
 
-#: The two derived targets. `demand_class` is a tercile of `sales` and
-#: `demand_class_code` is the same thing as 0/1/2, so both are deterministic
-#: functions of the regression target. They live here rather than in `targets.py`
-#: so that `features/build.py` can refuse them without importing it.
+#: The classification target: a tercile of `sales`, and therefore a deterministic function
+#: of the regression target. Neither may ever be a feature of the other, and nothing here
+#: enforces that — `features.feature_columns` is a whitelist, so a target is excluded by
+#: not appearing on it rather than by being named on a blocklist that has to be maintained.
 DEMAND_CLASS: Final = "demand_class"
-DEMAND_CLASS_CODE: Final = "demand_class_code"
 
 # ---------------------------------------------------------------------------
 # store.csv — one row per store, joined on `store`. These are the columns that
@@ -41,9 +43,9 @@ PROMO2_SINCE_WEEK: Final = "promo2_since_week"
 PROMO2_SINCE_YEAR: Final = "promo2_since_year"
 PROMO_INTERVAL: Final = "promo_interval"
 
-#: What demand is predicted *for*. A store on Rossmann and Walmart; a store-item
-#: pair on the Store Item Demand data, where the product axis is the point. Every
-#: adapter produces this column so one registry and one panel serve all sources.
+#: What demand is predicted *for*. Every adapter emits it, which is what lets one
+#: registry, one comparison table and one web panel serve every source rather than one
+#: each. `adapters.SOURCES` is the list of what it can currently hold.
 ENTITY: Final = "entity"
 
 #: The columns every adapter must emit. Anything beyond these is a dataset extra.
@@ -116,7 +118,7 @@ ROSSMANN_STORE_RENAME: Final[dict[str, str]] = {
 #: Left as float64 even where the values are conceptually integers: every one of
 #: these is missing for some stores, and an int column cannot hold a NaN. Imputing
 #: at read time would decide, silently and in the wrong place, what a missing
-#: competitor distance means. `features/preprocess.py` decides it in the open.
+#: competitor distance means. `features.py` decides it in the open.
 STORE_DTYPES: Final[dict[str, str]] = {
     STORE: "int32",
     STORE_TYPE: "string",
@@ -129,52 +131,3 @@ STORE_DTYPES: Final[dict[str, str]] = {
     PROMO2_SINCE_YEAR: "float64",
     PROMO_INTERVAL: "string",
 }
-
-# ---------------------------------------------------------------------------
-# Feature roles. `features/preprocess.py` builds one ColumnTransformer branch per
-# role, so these four tuples are the single place that decides how a column is
-# encoded. Adding a column to the data without adding it here means it is not a
-# feature — which is the safe default.
-# ---------------------------------------------------------------------------
-
-#: One-hot encoded. Every one is low-cardinality: 4, 3, 4 and 7 levels.
-CATEGORICAL_FEATURES: Final[tuple[str, ...]] = (
-    STORE_TYPE,
-    ASSORTMENT,
-    STATE_HOLIDAY,
-    DAY_OF_WEEK,
-)
-
-#: Ordinal-encoded, deliberately. `store` has 1115 levels; one-hot encoding it
-#: makes the design matrix sparse, which HistGradientBoosting refuses outright and
-#: which StandardScaler would densify into several gigabytes. ADR 0019.
-ORDINAL_FEATURES: Final[tuple[str, ...]] = (STORE,)
-
-#: Tf-idf vectorised. `promo_interval` is a comma-separated month list such as
-#: "Jan,Apr,Jul,Oct" — genuine text, and the only text this dataset has.
-TEXT_FEATURE: Final = PROMO_INTERVAL
-
-#: Imputed then scaled. Everything numeric that is not a key, a target or a role
-#: above; `features/build.py` appends the generated calendar and lag columns.
-STORE_NUMERIC_FEATURES: Final[tuple[str, ...]] = (
-    COMPETITION_DISTANCE,
-    COMPETITION_OPEN_MONTH,
-    COMPETITION_OPEN_YEAR,
-    PROMO2,
-    PROMO2_SINCE_WEEK,
-    PROMO2_SINCE_YEAR,
-)
-
-#: Columns that exist in training data but are unknown at the forecast origin.
-#: `customers` is the whole reason this constant exists: it is the single best
-#: predictor of `sales` and nobody knows it six weeks ahead. A model that uses it
-#: scores brilliantly and cannot be deployed. See features/build.py.
-UNAVAILABLE_AT_FORECAST_TIME: Final[frozenset[str]] = frozenset({CUSTOMERS})
-
-#: Never features, in either direction. `sales` is the regression target;
-#: `demand_class_code` is a tercile of it, so handing it to the regressor leaks the
-#: answer, and handing `sales` to the classifier does the same in reverse. Excluding
-#: only "the target of the current task" is not enough — the two targets encode each
-#: other, and the leak is invisible because both columns are legitimately present in
-#: the training frame.
-TARGET_COLUMNS: Final[frozenset[str]] = frozenset({SALES, DEMAND_CLASS, DEMAND_CLASS_CODE})

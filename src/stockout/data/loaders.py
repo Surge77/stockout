@@ -70,7 +70,7 @@ def canonicalise_store(frame: pd.DataFrame) -> pd.DataFrame:
     Missing values are left missing. `competition_distance` is absent for three
     stores and the `promo2_*` columns are absent for every store not running the
     continuing promotion — that absence is information, and imputing it here would
-    hide the decision inside a reader. `features/preprocess.py` makes it explicitly.
+    hide the decision inside a reader. `features.add_store_features` makes it explicitly.
     """
     out = frame.rename(columns=s.ROSSMANN_STORE_RENAME).copy()
 

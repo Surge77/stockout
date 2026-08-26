@@ -32,7 +32,7 @@ from stockout.hypothetical import (
     predict_described,
 )
 from stockout.persistence import Artifact
-from stockout.predict import Prediction, predict, serving_row
+from stockout.predict import Prediction, compare_row, predict
 from stockout.registry import build, model_names
 
 from .presentation import StoreProfile, Verdict, build_profiles
@@ -205,24 +205,27 @@ class ModelService:
         state_holiday: str,
         school_holiday: bool,
     ) -> dict[str, float]:
-        """Every other regressor on the same row.
+        """Every other regressor on the same row, in the headline's units.
 
-        `state_holiday` is threaded through because it was silently defaulting to `"0"`
-        here: the comparison list was answering an ordinary day while the headline above
-        it answered the holiday the visitor asked for, and the two were displayed as
-        disagreeing models rather than as two different questions.
+        Delegated to `predict.compare_row` rather than predicting here. These models are
+        fitted through the same de-trended split as the deployed one, so they answer in
+        residuals; this method used to return those raw, putting a figure near zero beside
+        a headline near five thousand. `Verdict.spread_low`/`spread_high` read this dict,
+        so the range printed under the prediction was drawn from the wrong scale too.
+
+        `compare_row` restores each store's line before returning, which is the same
+        arithmetic the headline goes through — one implementation, so they cannot drift
+        apart again.
         """
-        matrix = serving_row(
+        return compare_row(
             self.artifact,
+            self.others,
             entity=entity,
             date=date,
             promo=promo,
             state_holiday=state_holiday,
             school_holiday=school_holiday,
         )
-        return {
-            name: float(model.predict(matrix)[0]) for name, model in self.others.items()
-        }
 
     def comparison(self, task: Task = "regression") -> pd.DataFrame:
         """Every registered model scored on the split, fitted once and kept."""

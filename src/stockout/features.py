@@ -235,15 +235,20 @@ def build(
     *,
     encoders: dict[str, LabelEncoder] | None = None,
     age_as_of: pd.Timestamp | None = None,
+    entity_vocabulary: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
     """Sales rows plus optional metadata in, model-ready frame out.
 
     `age_as_of` is a serving concern only — see `add_store_features`. Training leaves it
     unset, so the frame the models are fitted on is unchanged by its existence.
+
+    `entity_vocabulary` is the other serving concern — see `_entity_codes`. Training
+    derives it from the frame and the artefact carries it, because a one-row request
+    cannot recover the ordering a million-row fit produced.
     """
     frame = add_calendar_features(sales)
     frame = add_store_features(frame, stores, age_as_of=age_as_of)
-    frame[ENTITY_CODE] = _entity_codes(frame[s.ENTITY])
+    frame[ENTITY_CODE] = _entity_codes(frame[s.ENTITY], entity_vocabulary)
     frame, encoders = encode_labels(frame, encoders=encoders)
 
     for column in feature_columns(frame):
@@ -252,8 +257,35 @@ def build(
     return frame, encoders
 
 
-def _entity_codes(entities: pd.Series) -> pd.Series:
-    """Stable integer per entity. Numeric ids keep their value; others hash by order."""
+#: The code for an entity the vocabulary does not contain. Never produced in training, so
+#: it lands outside every split point the trees were built from rather than impersonating
+#: a real series. `predict.serving_row` refuses unknown entities before they reach here;
+#: this is what shows up if that guard is ever bypassed.
+UNKNOWN_ENTITY_CODE = -1
+
+
+def _entity_codes(entities: pd.Series, vocabulary: list[str] | None = None) -> pd.Series:
+    """Stable integer per entity, by whichever route the ids allow.
+
+    **A carried vocabulary wins.** Position in a fixed list is the same number whether the
+    frame holds one row or a million, which is the property serving needs and the only one
+    that survives a single-row request.
+
+    **Numeric ids are their own code.** Rossmann's entities are store numbers, so the id
+    *is* a stable integer and no vocabulary is needed. Kept as the fast path deliberately:
+    routing Rossmann through a vocabulary would renumber every store and move scores that
+    are published.
+
+    **Anything else falls back to `factorize`**, which is correct only when the frame is
+    the whole training frame. A store-item entity such as `"3_26"` is not numeric, so
+    before the vocabulary existed a one-row serving frame factorized it to 0 and the model
+    answered about whichever series happened to sort first.
+    """
+    if vocabulary is not None:
+        lookup = {name: index for index, name in enumerate(vocabulary)}
+        codes = entities.astype("string").map(lookup)
+        return codes.fillna(UNKNOWN_ENTITY_CODE).astype("int32")
+
     numeric = pd.to_numeric(entities, errors="coerce")
     if not numeric.isna().any():
         return numeric.astype("int32")

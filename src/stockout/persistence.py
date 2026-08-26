@@ -38,7 +38,7 @@ from .trend import StoreTrends
 
 #: Bumped whenever the artefact's shape changes. An old file read by new code is a worse
 #: failure than a refusal, because it usually half-works.
-ARTIFACT_VERSION = 6
+ARTIFACT_VERSION = 7
 
 
 @dataclass
@@ -67,6 +67,13 @@ class Artifact:
     cold_regressor: Any = None
     cold_feature_columns: list[str] = field(default_factory=list)
     cold_scores: dict[str, float] = field(default_factory=dict)
+
+    #: The entity ordering `entity_code` was built against, or `None` where the ids are
+    #: numeric and are their own code. Without it a one-row serving frame re-derives the
+    #: ordering from that one row, so every request answers about whichever series sorts
+    #: first — see `features._entity_codes`. `entities` above is the same list when this
+    #: is set; they are kept apart because one is a guard and this one is a mapping.
+    entity_vocabulary: list[str] | None = None
 
     #: The span of the dataset this was built from — the dates for which a true figure
     #: exists. Deliberately the dataset's range and not the training split's: the question

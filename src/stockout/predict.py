@@ -12,6 +12,7 @@ answer confidently with nonsense.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -115,6 +116,7 @@ def serving_row(
         artifact.stores,
         encoders=artifact.encoders,
         age_as_of=artifact.observed_through,
+        entity_vocabulary=artifact.entity_vocabulary,
     )
 
     missing = [c for c in artifact.feature_columns if c not in built.columns]
@@ -206,18 +208,32 @@ def _every_regressor(artifact: Artifact, matrix: pd.DataFrame) -> dict[str, floa
 
 def compare_row(
     artifact: Artifact,
-    fitted: dict[str, object],
+    fitted: Mapping[str, object],
     *,
     entity: str,
     date: str | pd.Timestamp,
     promo: bool = False,
+    state_holiday: str = "0",
+    school_holiday: bool = False,
 ) -> dict[str, float]:
     """Every fitted regressor's prediction for one row, for the panel's comparison panel.
 
     `fitted` comes from the web service, which keeps the whole registry fitted in memory
     so the expandable section can show that the models disagree.
+
+    Every field of the request is threaded, not just the promotion. Without the two
+    holiday fields this answered an ordinary day while the headline above it answered the
+    Christmas that was actually asked for, and the page presented the gap as two models
+    disagreeing rather than as two different questions.
     """
-    matrix = serving_row(artifact, entity=entity, date=date, promo=promo)
+    matrix = serving_row(
+        artifact,
+        entity=entity,
+        date=date,
+        promo=promo,
+        state_holiday=state_holiday,
+        school_holiday=school_holiday,
+    )
     answers: dict[str, float] = {}
     for name in model_names("regression"):
         model = fitted.get(name)

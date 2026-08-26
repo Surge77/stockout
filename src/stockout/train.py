@@ -92,6 +92,7 @@ def train(
         dataset=prepared.name,
         entity_label=prepared.source.entity_label,
         entities=prepared.entities(),
+        entity_vocabulary=prepared.entity_vocabulary,
         # Scored through `scored_against`, which puts the store's line back before
         # measuring. The regressor answers in residuals on a de-trended split, and an r²
         # measured on residuals is a different, easier number wearing the same name.
