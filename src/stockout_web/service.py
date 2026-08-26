@@ -29,14 +29,12 @@ from stockout import persistence, ranking
 from stockout import train as training
 from stockout.datasets import Prepared, prepare
 from stockout.errors import StockoutError
-from stockout.hypothetical import HypotheticalPrediction
 from stockout.persistence import Artifact
 from stockout.predict import Prediction, compare_row, predict
 from stockout.ranking import Ranking
 
 from .benchmarks import Benchmarks, cards, fit_every_regressor
 from .catalogue import Catalogue, actual_for
-from .described import describe as describe_shop
 from .presentation import StoreProfile, build_profiles
 from .verdict import Verdict
 
@@ -80,7 +78,7 @@ class ModelService:
         if not persistence.exists():
             prepared = prepare(dataset)
             artifact, _ = training.train(prepared)
-            return cls(artifact=artifact, prepared=prepared, others=fit_every_regressor(prepared))
+            return cls(artifact=artifact, prepared=prepared)
 
         try:
             artifact = persistence.load()
@@ -98,7 +96,7 @@ class ModelService:
             ) from exc
 
         prepared = prepare(artifact.dataset)
-        return cls(artifact=artifact, prepared=prepared, others=fit_every_regressor(prepared))
+        return cls(artifact=artifact, prepared=prepared)
 
     # -- what can be asked -------------------------------------------------
 
@@ -195,31 +193,6 @@ class ModelService:
             typical=self.catalogue.typical(),
         )
 
-    def describe(
-        self,
-        *,
-        store_type: str,
-        assortment: str,
-        competition_distance: float | None,
-        promo2: bool,
-        date: str,
-        promo: bool,
-        state_holiday: str = "0",
-        school_holiday: bool = False,
-    ) -> tuple[HypotheticalPrediction, list[tuple[str, float]]]:
-        """Answer for a shop that does not exist, and say what each attribute was worth."""
-        return describe_shop(
-            self.artifact,
-            store_type=store_type,
-            assortment=assortment,
-            competition_distance=competition_distance,
-            promo2=promo2,
-            date=date,
-            promo=promo,
-            state_holiday=state_holiday,
-            school_holiday=school_holiday,
-        )
-
     def verdict(self, answer: Prediction) -> Verdict | None:
         """The prediction, phrased for somebody deciding how much to order."""
         profile = self.profile_for(answer.entity)
@@ -265,6 +238,34 @@ class ModelService:
             school_holiday=school_holiday,
         )
 
+    # -- warm-up -----------------------------------------------------------
+
+    async def warm(self) -> None:
+        """Fit the comparison regressors off the event loop, after the app is answering.
+
+        These exist for one thing: the expandable list showing that seven regressors
+        disagree about a row. Fitting them **before** serving cost thirteen minutes of
+        startup on Rossmann — a random forest and a voting ensemble over 670,422 rows are
+        most of it — during which the app answered nothing at all, for a feature nobody
+        had asked for yet.
+
+        Fitted on a sample would have been faster and dishonest: the page calls the spread
+        "the honest width of the estimate", and a width widened by sampling noise is not
+        that. So they are fitted in full, just not in the way of the door.
+
+        Until this finishes `others` is empty, `Prediction.per_model` comes back empty, and
+        the page simply omits the comparison section — which is the same thing it does for
+        an artefact that never had one.
+        """
+        if self.others:
+            return
+        self.others = await asyncio.to_thread(fit_every_regressor, self.prepared)
+
+    @property
+    def is_warm(self) -> bool:
+        """Whether the comparison regressors are fitted yet."""
+        return bool(self.others)
+
     # -- the admin pages ---------------------------------------------------
 
     async def comparison_tables(self) -> tuple[pd.DataFrame, pd.DataFrame, float]:
@@ -286,6 +287,4 @@ class ModelService:
     ) -> ModelService:
         prepared = self.prepared if dataset == self.prepared.name else prepare(dataset)
         artifact, _ = training.train(prepared, regressor=regressor, classifier=classifier)
-        return ModelService(
-            artifact=artifact, prepared=prepared, others=fit_every_regressor(prepared)
-        )
+        return ModelService(artifact=artifact, prepared=prepared)

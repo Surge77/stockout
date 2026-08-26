@@ -142,6 +142,10 @@ class _StubService:
     def cards(self) -> list[dict[str, object]]:
         return []
 
+    async def warm(self) -> None:
+        """The comparison regressors are fitted in the background; the stub has none."""
+        return None
+
     async def comparison_tables(self) -> tuple[pd.DataFrame, pd.DataFrame, float]:
         """Startup warms this in the background; the stub answers instantly.
 

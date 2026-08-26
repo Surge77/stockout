@@ -7,6 +7,7 @@ loses access on their very next request rather than at their next sign-in.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from typing import Annotated, Literal
 
@@ -14,6 +15,7 @@ import pandas as pd
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
+from stockout.data.adapters import SOURCES, available
 from stockout.errors import StockoutError
 from stockout.evaluate import to_markdown
 from stockout.registry import model_names
@@ -22,6 +24,7 @@ from .. import db, users
 from ..auth import AdminUser
 from ..service import ModelService
 from ..templating import page
+from ..warmup import warm_service
 
 router = APIRouter(prefix="/admin")
 
@@ -40,6 +43,10 @@ def _dashboard_context(request: Request) -> dict[str, object]:
         "provenance": artifact.provenance().splitlines(),
         "regressors": model_names("regression"),
         "classifiers": model_names("classification"),
+        # Only sources whose files are actually on disk. Offering `rossmann` on a machine
+        # that has never run `fetch` would put a choice in the form whose only outcome is
+        # an error, and the dashboard is where somebody goes to change what is deployed.
+        "datasets": _deployable(),
         "dataset": artifact.dataset,
         "entity_label": artifact.entity_label,
         "entity_count": len(artifact.entities),
@@ -53,18 +60,64 @@ async def dashboard(request: Request, admin: AdminUser) -> HTMLResponse:
     return page(request, "admin.html", _dashboard_context(request))
 
 
+def _deployable() -> list[dict[str, object]]:
+    """The sources that can be deployed from here, with what choosing one costs.
+
+    The cost is worth stating on the form. Fitting `synthetic_products` is half a minute;
+    fitting `rossmann` is over an hour, because the cold-start score alone refits the
+    regressor once per held-out shop over 670,422 rows. A browser will not wait for that,
+    so the form says which is which and points the long one at the CLI.
+    """
+    out: list[dict[str, object]] = []
+    for source in SOURCES:
+        if not available(source):
+            continue
+        out.append(
+            {
+                "name": source.name,
+                "description": source.description,
+                "kind": "product" if source.has_products else "store-day",
+                "slow": bool(source.raw_files),
+            }
+        )
+    return out
+
+
+def _deployable_names() -> set[str]:
+    return {str(source["name"]) for source in _deployable()}
+
+
 @router.post("/train", response_class=HTMLResponse)
 async def retrain(
     request: Request,
     admin: AdminUser,
     regressor: Annotated[str, Form()],
     classifier: Annotated[str, Form()],
+    dataset: Annotated[str | None, Form()] = None,
 ) -> HTMLResponse:
-    """Fit a new pair and deploy it, or explain why the pair was refused."""
+    """Fit a new pair and deploy it, or explain why the request was refused.
+
+    `dataset` is what makes the product pages reachable without the CLI. Deploying a
+    product source swaps `/what-if` for `/products` on the very next request, because the
+    surfaces read the artefact rather than a setting — see `templating._provenance`.
+
+    Defaults to what is already deployed, so a form that omits the field keeps its old
+    meaning of "refit this data with a different pair".
+    """
     service = _service(request)
+    chosen = dataset or service.artifact.dataset
+
+    # A `<select>` constrains a browser, not a request. Without this an unknown name would
+    # reach `prepare` and surface as a stack trace rather than a refusal.
+    if chosen not in _deployable_names():
+        context = _dashboard_context(request)
+        offered = ", ".join(sorted(_deployable_names()))
+        context["error"] = f"{chosen!r} is not a deployable dataset; choose from {offered}"
+        return page(request, "admin.html", context)
+
     try:
         replacement = await service.retrain(
-            regressor=regressor, classifier=classifier, dataset=service.artifact.dataset
+            regressor=regressor, classifier=classifier, dataset=chosen
         )
     except StockoutError as exc:
         context = _dashboard_context(request)
@@ -74,8 +127,14 @@ async def retrain(
     # Swap the whole object: a request arriving mid-retrain sees the old pair or the
     # new one, never a regressor from one and thresholds from the other.
     request.app.state.models = replacement
+
+    # The comparison regressors are not fitted by `retrain` — see `ModelService.warm`.
+    # Warmed here in the background so the dashboard comes back now rather than after
+    # another seven fits on the new data.
+    request.app.state.warm = asyncio.create_task(warm_service(replacement))
+
     context = _dashboard_context(request)
-    context["notice"] = f"deployed {regressor} and {classifier}"
+    context["notice"] = f"deployed {regressor} and {classifier} on {chosen}"
     return page(request, "admin.html", context)
 
 

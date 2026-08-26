@@ -189,9 +189,14 @@
       <span class="label">Predicted {% if unit == "units" %}units for the day{% else %}sales for the day{% endif %}</span>
       <span class="value">{{ sales }}</span>
       <small>{{ regressor|replace('_', ' ') }}</small>
-      {% if verdict %}
+      {# Only once the comparison regressors are fitted. They are warmed in the
+         background after startup, and before they land `spread_low` and `spread_high`
+         both collapse onto the single prediction — printing "7,409–7,409 across all
+         seven regressors", which is a lie about seven models rather than a missing
+         feature. #}
+      {% if verdict and per_model %}
       <span class="interval">{{ '{:,.0f}'.format(verdict.spread_low) }}–{{ '{:,.0f}'.format(verdict.spread_high) }}
-        <em>across all seven regressors</em></span>
+        <em>across all {{ per_model|length }} regressors</em></span>
       {% endif %}
     </div>
     <div class="answer classification class-{{ demand_class|lower }}">

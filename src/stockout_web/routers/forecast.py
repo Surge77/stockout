@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse
 from stockout.errors import StockoutError
 
 from ..auth import CurrentUser
+from ..described import describe
 from ..service import ModelService
 from ..templating import page
 
@@ -248,7 +249,8 @@ async def whatif(
     })
 
     try:
-        answer, why = _service(request).describe(
+        answer, why = describe(
+            _service(request).artifact,
             store_type=store_type,
             assortment=assortment,
             competition_distance=_metres(competition_distance),

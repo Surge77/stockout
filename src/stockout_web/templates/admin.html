@@ -48,10 +48,34 @@
 <section class="card">
   <h2>Retrain and redeploy</h2>
   <p class="note">
-    Fits a new pair on the same dataset and swaps it in. Takes a few seconds; the running
-    pair keeps answering until the new one is ready.
+    Fits a new pair and swaps it in. The running pair keeps answering until the new one is
+    ready.
+  </p>
+  <p class="note">
+    <strong>Changing the dataset changes which pages exist.</strong> A product dataset
+    replaces <em>What if</em> with <em>Shelf</em> in the bar above, because a store-item
+    source publishes nothing describing an item to build a hypothetical from — and a
+    store-day source has no shelf to rank. Nothing is configured for that; every page
+    reads what is deployed.
   </p>
   <form method="post" action="/admin/train" class="inline-form">
+    <div class="field field-wide">
+      <label for="dataset">Dataset</label>
+      <select id="dataset" name="dataset">
+        {% for source in datasets %}
+        <option value="{{ source.name }}" {% if source.name == dataset %}selected{% endif %}>
+          {{ source.name }} — {{ source.kind }}{% if source.slow %} (slow){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <small>
+        Only sources whose files are on disk. The competition datasets are marked
+        <strong>slow</strong>: Rossmann takes over an hour, because the cold-start score
+        refits the regressor once per held-out shop over 670,422 rows — longer than a
+        browser will wait, so run that one as
+        <code>python -m stockout train --dataset rossmann</code>.
+      </small>
+    </div>
     <div class="field">
       <label for="regressor">Regressor</label>
       <select id="regressor" name="regressor">

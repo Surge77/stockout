@@ -25,6 +25,7 @@ from .routers import admin, forecast, products
 from .routers import auth as auth_routes
 from .service import ModelService
 from .templating import page
+from .warmup import warm_service
 
 
 @asynccontextmanager
@@ -39,28 +40,17 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     _seed_admin()
     app.state.models = ModelService.load()
 
-    # Warm the comparison tables in the background. Fitting every registered model for
-    # both tasks takes about a minute and a half, almost all of it `svc`. Done here the
-    # app still answers immediately and the admin page is usually ready before anybody
-    # opens it; done lazily the first visitor waits the whole time; done synchronously
-    # above, every restart does.
-    warm = asyncio.create_task(_warm_comparisons(app))
+    # Warm the two expensive fits in the background. Between them they took thirteen
+    # minutes of startup on Rossmann — a random forest and a voting ensemble over 670,422
+    # rows, plus `svc` for the comparison table — during which the app answered nothing.
+    # Done here it answers immediately and both are usually ready before anybody opens the
+    # pages that need them; done lazily the first visitor waits; done synchronously, every
+    # restart does.
+    warm = asyncio.create_task(warm_service(app.state.models))
     try:
         yield
     finally:
         warm.cancel()
-
-
-async def _warm_comparisons(app: FastAPI) -> None:
-    """Precompute the comparison tables, and never take the app down if it fails."""
-    try:
-        await app.state.models.comparison_tables()
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        # Broad on purpose: a warm-up is an optimisation, and no failure in it is worth
-        # taking the app down for. The page still computes on demand.
-        print(f"comparison warm-up skipped: {exc}")
 
 
 def _seed_admin() -> None:
