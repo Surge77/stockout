@@ -156,8 +156,23 @@ the same number for every description anybody typed, with the same confidence as
 estimate. That is precisely the failure this page exists to avoid, so it declines instead.
 
 **Admin panel** (`/admin`) — model cards with a bar per model, the deployed pair's
-provenance and held-out scores, retrain-and-redeploy with any pair from the registry, the
-full comparison table for both tasks, and account management.
+provenance and held-out scores, the full comparison table for both tasks, and account
+management.
+
+**Retrain and redeploy** takes a **dataset** as well as a pair, and that is what makes the
+product half reachable without a terminal. Deploying a store-item source swaps *What if*
+for *Shelf* in the bar on the very next request — nothing is configured for that; every
+page reads what is deployed. The form offers only sources whose files are on disk, and
+marks the competition datasets **slow**: Rossmann is over an hour, because the cold-start
+score refits the regressor once per held-out shop over 670,422 rows, which is longer than
+a browser will wait. Run that one from the CLI.
+
+The app answers in **under a second** from cold. The seven regressors behind the forecast
+page's spread, and the admin comparison tables, are fitted in the background *after* it
+starts serving — together they were thirteen minutes of startup on Rossmann, for two
+features nobody had opened yet. They are fitted in full rather than on a sample: the page
+calls that spread "the honest width of the estimate", and a width widened by sampling
+noise is not that. Until they land the page simply omits the section.
 
 A regressor has no accuracy and a classifier has no r², so each card names the metric its
 own task actually produces. Nothing on the page is a number that cannot exist.

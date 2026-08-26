@@ -6,8 +6,9 @@ State at the last commit: 139 tests green, `pyright` and `ruff` clean, working t
 Run the app with `uvicorn stockout_web.main:app` on port 8000.
 
 **The deployed artefact decides which pages exist.** A product artefact offers `/products`
-and hides `/what-if`; a store-day artefact does the reverse. Switch with
-`python -m stockout train --dataset <name>` or from `/admin`.
+and hides `/what-if`; a store-day artefact does the reverse. Switch from the **dataset
+dropdown on `/admin`** (36s for either synthetic source) or with
+`python -m stockout train --dataset <name>`. Rossmann is over an hour, so it is a CLI job.
 
 | dataset | r² | accuracy | floor |
 |---|---|---|---|
@@ -84,9 +85,22 @@ Each takes several minutes.
 ## 5. The Rossmann artefact is 2.6 GB — low
 
 `random_forest` with sklearn's default 100 estimators over 670,422 rows dominates it. It
-loads in seconds and works, but it makes the web test suite slow whenever a test boots the
-real lifespan, and it is an awkward thing to keep on disk. Capping `max_depth` or
-`n_estimators` would shrink it; measure what that costs in r² first.
+loads in seconds and works, but it is an awkward thing to keep on disk, and `artifacts/` is
+gitignored so it is unrecoverable if overwritten. Capping `max_depth` or `n_estimators`
+would shrink it; measure what that costs in r² first.
+
+## 6. Retraining a large dataset from the dashboard will outlast the browser — medium
+
+The dataset dropdown makes every source deployable from `/admin`, and both synthetic
+sources fit in about 36 seconds. Rossmann takes over an hour: `train._unseen_store_r2`
+refits the regressor once per held-out shop over 670,422 rows. The request is off the event
+loop, so the app keeps answering everyone else, but the admin's own tab will time out long
+before the fit lands — and the retrain still completes and deploys, so the result is a
+confusing success that looks like a failure.
+
+The form marks those datasets **slow** and points at the CLI, which is honest but not a
+fix. A real one is a background job with a status the page can poll. Worth doing only if
+deploying the competition data from the web is actually wanted.
 
 ---
 
@@ -105,3 +119,9 @@ real lifespan, and it is an awkward thing to keep on disk. Capping `max_depth` o
   now go through `predict.compare_row`.
 - **`ModelService.load` no longer retrains over an artefact it cannot read**, which had
   silently replaced a Rossmann deployment with a synthetic one on a version bump.
+- **The dataset is deployable from `/admin`.** It passed `dataset=artifact.dataset` and had
+  no field for anything else, so the whole product half was reachable only from a terminal.
+- **Startup is 0.4s, not thirteen minutes.** The seven comparison regressors and the admin
+  tables are warmed in the background after the app is answering, not before it will.
+- **`.bar` was defined twice** — the shelf bars took the site header's class name and broke
+  every page's header. `tests/web/test_stylesheet.py` fails on any duplicate class now.

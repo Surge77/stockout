@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- **Deploy any dataset from the dashboard.** `/admin/train` passed
+  `dataset=service.artifact.dataset` and had no field for anything else, so it could only
+  refit the same data with a different pair — leaving the entire product half of the
+  project, the shelf page included, reachable only from a terminal. The form now offers
+  every source whose files are on disk, validates the choice against that set, and says
+  what changing it does.
+
 - **Demand per product, not only per shop.** A row can now be one shop-item-day with
   `sales` in units, alongside the shop-day rows every source produced until now.
   `schemas.ENTITY` and `Source.entity_label` were built for this and had one shape between
@@ -38,6 +45,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   the matrix a published score was measured on.
 
 ### Fixed
+
+- **Startup took thirteen minutes on Rossmann.** `fit_every_regressor` ran before the app
+  would answer anything — a random forest and a voting ensemble over 670,422 rows — for one
+  expandable list on the forecast page. Warmed in the background after the app is serving,
+  beside the comparison tables that already worked that way: 0.4s to first response.
+  Fitted in full rather than on a sample, because the page calls that spread "the honest
+  width of the estimate" and a width widened by sampling noise is not that.
+
+- **The forecast page claimed a spread across seven models while showing one.** The
+  interval line was gated on the verdict rather than on the comparison models, so before
+  they were fitted it printed the same number twice under "across all seven regressors".
+
+- **`.bar` was defined twice.** The shelf table's progress bars took the site header's
+  class name at the bottom of the same stylesheet; at equal specificity the later rule won,
+  and every header on every page became an 8px rounded green sliver with its nav spilling
+  across the `<h1>`. Renamed to `.shelf-bar`, and `tests/web/test_stylesheet.py` now fails
+  on any top-level class defined twice.
 
 - **`entity_code` did not survive serving.** `features._entity_codes` fell back to
   `pd.factorize` for any entity id that is not numeric, and factorize numbers whatever
