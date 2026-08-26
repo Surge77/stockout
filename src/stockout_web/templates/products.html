@@ -132,7 +132,7 @@
           {# Width against the busiest item, so the column reads as a shape rather than as
              twenty-five numbers. Not a share of the total: that would make every bar tiny
              on a long shelf. #}
-          <span class="bar" style="width: {{ (row.sales / peak * 100)|round(1) }}%"
+          <span class="shelf-bar" style="width: {{ (row.sales / peak * 100)|round(1) }}%"
                 role="img" aria-label="{{ '{:,.0f}'.format(row.sales) }} {{ unit }}"></span>
         </td>
         <td><b class="tag class-{{ row.demand_class|lower }}">{{ row.demand_class }}</b></td>
