@@ -43,14 +43,21 @@ class RankedItem:
     demand_class: str
     thresholds: tuple[float, float]
 
-    #: The item's own median across the fitted window, where the caller supplied one.
-    #: `None` keeps this usable without a frame to hand — the CLI has one, a served
-    #: request would rather not carry the whole panel around.
+    #: What this item normally does **on this date** — its own fitted line, read at the
+    #: requested day. Falls back to its median across the window where the artefact has no
+    #: lines, and to `None` where the caller supplied nothing.
+    #:
+    #: The line, not the median, and the difference is the whole point. `demand_class`
+    #: above is cut on *residuals* — distance from this line — so a median baseline puts
+    #: the two side by side measuring against different things. On a growing item in the
+    #: seasonal peak that produced rows reading `Low` beside `+52% vs its usual`, both
+    #: technically right and together plainly nonsense: the item was far above its
+    #: all-time median and slightly below where its own line said it should be that day.
     typical: float | None = None
 
     @property
     def difference_percent(self) -> float:
-        """How far above or below this item's usual day the prediction sits."""
+        """How far above or below this item's own line for the day the prediction sits."""
         if not self.typical:
             return 0.0
         return (self.sales - self.typical) / self.typical * 100.0
@@ -147,7 +154,7 @@ def rank(
             sales=float(predicted),
             demand_class=demand,
             thresholds=_thresholds_at(artifact, entity, stamp),
-            typical=None if typical is None else typical.get(entity),
+            typical=_usual_for(artifact, entity, stamp, typical),
         )
         for entity, predicted, demand in zip(entities, sales, classes, strict=True)
     ]
@@ -156,6 +163,28 @@ def rank(
     return Ranking(
         store=str(store), date=stamp, items=items, status=date_status(artifact, date)
     )
+
+
+def _usual_for(
+    artifact: Artifact,
+    entity: str,
+    stamp: pd.Timestamp,
+    fallback: dict[str, float] | None,
+) -> float | None:
+    """What this item normally does on this date, on the same scale as its cut points.
+
+    The item's own fitted line where the artefact has one. That is the baseline the demand
+    bands are cut against — they are terciles of the *residual* — so measuring the printed
+    percentage against anything else puts two columns beside each other that answer
+    different questions and appear to contradict.
+
+    The supplied medians are the fallback for an artefact with no lines. They are a poorer
+    baseline even then: a median over the whole window sits below a growing item's level
+    late in that window, so every late date reads as unusually busy.
+    """
+    if artifact.trends is not None:
+        return float(artifact.trends.level_at(entity, stamp))
+    return None if fallback is None else fallback.get(entity)
 
 
 def _restored(

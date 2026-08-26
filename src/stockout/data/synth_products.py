@@ -134,7 +134,11 @@ def _calendar_factor(dates: pd.DatetimeIndex) -> np.ndarray:
     """
     weekday = np.asarray([_WEEKDAY_LIFT[day] for day in dates.dayofweek], dtype="float64")
     day_of_year = np.asarray(dates.dayofyear, dtype="float64")
-    season = 1.0 + _SEASON_DEPTH * np.sin(
+    # Cosine, not sine: `cos` is at its maximum when the argument is zero, so the peak
+    # lands on `_SEASON_PEAK_DAY` as the name promises. With `sin` the same expression
+    # puts a zero crossing there and the real peak a quarter-year later — the constant
+    # said mid-July and the data peaked in late October.
+    season = 1.0 + _SEASON_DEPTH * np.cos(
         2.0 * np.pi * (day_of_year - _SEASON_PEAK_DAY) / _DAYS_PER_YEAR
     )
     return weekday * season

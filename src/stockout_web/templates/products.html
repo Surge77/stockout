@@ -158,12 +158,19 @@
     is made of. The band says whether that figure is unusual <em>for that item</em> —
     its days sorted into its own quietest, middle and busiest thirds. A big seller can top
     the list and still be having a quiet day for itself, and that is the row worth looking
-    at twice.
+    at twice.<br>
+    <strong>The last column is measured against the item's own trend line at this date</strong>,
+    not against its all-time average — the same baseline the bands are cut on, so the two
+    are comparable. An item that has grown all year is not &ldquo;busy&rdquo; merely for
+    being bigger than it was in 2013.
   </p>
   <p class="note">
     The count comes from {{ regressor|replace('_', ' ') }} and the band from
-    {{ classifier|replace('_', ' ') }}. They are fitted separately and can disagree;
-    neither corrects the other.
+    {{ classifier|replace('_', ' ') }}. They are fitted separately and can disagree —
+    a row can sit between its own cut points while the classifier calls it quiet. Neither
+    corrects the other, and on this dataset the classifier is the weaker of the two
+    ({{ '%.0f'|format(classifier_accuracy * 100) }}% against a {{ '%.0f'|format(33.3) }}%
+    floor), so where they split the predicted count is the more defensible number.
   </p>
 </section>
 {% endif %}

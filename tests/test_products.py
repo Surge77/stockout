@@ -253,3 +253,40 @@ def test_a_store_day_artefact_has_no_shelf_to_rank(prepared, tmp_path) -> None:
 def test_the_stores_are_listed_in_numeric_order(artifact) -> None:
     """String order would put store 10 between 1 and 2."""
     assert ranking.stores_in(artifact) == [str(n) for n in range(1, 11)]
+
+
+def test_the_printed_percentage_uses_the_same_baseline_as_the_band(artifact) -> None:
+    """Two columns sit side by side, so they must answer against the same thing.
+
+    `demand_class` is a tercile of the residual — distance from the item's own line. If
+    "vs its usual" measured against the window median instead, a growing item in the
+    seasonal peak reads `Low` beside `+52%`: both technically right, together nonsense.
+
+    Pinning the relationship rather than a number: a prediction above its own line must
+    print positive, and one below must print negative.
+    """
+    shelf = ranking.rank(artifact, store="3", date=DATE)
+
+    for item in shelf.items:
+        level = artifact.trends.level_at(item.entity, shelf.date)
+        assert item.typical == pytest.approx(level)
+        assert (item.sales > level) == (item.difference_percent > 0)
+
+
+def test_the_printed_difference_stays_within_the_scale_of_the_bands(artifact) -> None:
+    """The regression this replaced: `Low` beside `+52% vs its usual`.
+
+    Against the window median, a growing item in the seasonal peak printed half again its
+    usual while its band said quiet. Against its own line the figure is a residual, on the
+    same scale as the cut points, so it lands in the tens of percent rather than the
+    hundreds.
+
+    Not asserting that the band and the sign agree: they are two models, fitted
+    separately, and this package says throughout that they may disagree. A predicted
+    number can sit between an item's cut points while the classifier calls it Low, and
+    neither is a correction of the other.
+    """
+    shelf = ranking.rank(artifact, store="3", date=DATE)
+    widest = max(abs(item.difference_percent) for item in shelf.items)
+
+    assert widest < 50.0

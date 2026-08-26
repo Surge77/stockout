@@ -51,6 +51,11 @@ def _context(request: Request) -> dict[str, object]:
         "observed_through": end,
         "regressor": service.artifact.regressor_name,
         "classifier": service.artifact.classifier_name,
+        # Shown beside the note about the two models disagreeing. Where the classifier is
+        # barely above its floor, saying so is what tells a reader which number to trust.
+        "classifier_accuracy": service.artifact.scores.get("classification", {}).get(
+            "accuracy", 0.0
+        ),
     }
 
 

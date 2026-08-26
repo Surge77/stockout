@@ -76,12 +76,17 @@ ROW_FEATURES: tuple[str, ...] = (s.PROMO, s.STATE_HOLIDAY, s.SCHOOL_HOLIDAY)
 #: rows each and ten store multipliers from twenty items' worth, then compose them. Fewer
 #: quantities, each estimated from more data.
 #:
-#: Measured on `synthetic_products`: the pair is worth about +0.017 r² on an ordinary
-#: held-out split, where every series has hundreds of its own rows and identity alone is
-#: nearly enough. What they really buy shows up on a store-item pair held out entirely —
-#: mean r² -18.4 from identity alone against -0.18 from the two axes, because a code the
-#: fit never saw lands in an arbitrary leaf while a store and an item it has both seen
-#: thousands of times still compose.
+#: Measured on `synthetic_products`, gradient boosting, five held-out pairs: the axes are
+#: worth about **+0.009 r²** on an ordinary held-out split (0.8965 -> 0.9058), which is
+#: small — every series has hundreds of its own rows there, so identity alone is nearly
+#: enough and this is the wrong test for them.
+#:
+#: What they buy shows up on a store-item pair held out **entirely**: mean r² **-14.39**
+#: from identity alone against **-0.39** from the two axes. A code the fit never saw lands
+#: in whichever leaf its integer happens to fall down; a store and an item the fit has both
+#: seen thousands of times still compose. Both are negative — neither beats answering with
+#: that pair's own mean — but they are two different orders of failure, and only one of
+#: them is usable as a starting estimate for a line a shop has not stocked before.
 #:
 #: `entity_code` is kept alongside them rather than replaced. The pair are additive by
 #: construction; anything specific to one store's copy of one item — a local favourite —
