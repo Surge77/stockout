@@ -2,6 +2,31 @@
 {% block title %}What if — stockout{% endblock %}
 
 {% block content %}
+{% if not available %}
+{# No cold-start model was fitted, because the deployed source publishes nothing that
+   describes an entity. A form here would take four inputs and return the same number for
+   every combination of them, which is worse than a page that explains itself. #}
+<h1>What would one of these take?</h1>
+<section class="card">
+  <p class="lede">
+    This page describes a shop that does not exist yet and estimates what it would take —
+    from its type, its range and how far the nearest competitor is. The deployed models are
+    fitted on <strong>{{ dataset }}</strong>, which publishes <strong>none of those</strong>.
+    An {{ entity_label }} there is an id, a date and a count, and nothing else.
+  </p>
+  <p>
+    So there is no honest answer to give. A model fitted on what remains — the calendar
+    alone — would return one number for every description anybody typed, and present it
+    with the same confidence as a real estimate. That is the failure this page exists to
+    avoid, so it declines instead.
+  </p>
+  <p class="note">
+    <a href="/products">The shelf</a> ranks every item a shop already stocks, and
+    <a href="/">the forecast page</a> answers one of them for a day. Both are about
+    {{ entity_label }}s that exist, which is what this source can support.
+  </p>
+</section>
+{% else %}
 <h1>What would a shop like this take?</h1>
 <p class="lede">
   No store id. Describe a shop by its attributes and get a sales estimate for one day —
@@ -164,5 +189,6 @@
     forecast page the class is always relative to the store you picked.
   </p>
 </section>
+{% endif %}
 {% endif %}
 {% endblock %}

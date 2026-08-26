@@ -2,9 +2,10 @@
 {% block title %}Forecast — stockout{% endblock %}
 
 {% block content %}
-<h1>Retail sales and demand</h1>
+<h1>{% if has_products %}Product demand{% else %}Retail sales and demand{% endif %}</h1>
 <p class="lede">
-  Pick a {{ entity_label }} and a day. The answer is two predictions from two different
+  {% if has_products %}Pick a shop, an item and a day. Ranking a whole shelf at once is
+  <a href="/products">the other page</a>.{% else %}Pick a {{ entity_label }} and a day.{% endif %} The answer is two predictions from two different
   models: how much it will sell, and whether that is a Low, Medium or High demand day
   <em>for that {{ entity_label }}</em>.
 </p>
@@ -39,6 +40,36 @@
 </details>
 
 <form method="post" action="/forecast" class="card">
+  {% if has_products %}
+  {# Two dropdowns, not one of every pair: ten shops and fifty items beats five hundred
+     rows nobody can scan. Changing the shop reloads its own item list on submit. #}
+  <div class="field-row">
+    <div class="field">
+      <label for="store">Shop</label>
+      <select id="store" name="store" required onchange="this.form.submit()">
+        {% for option in stores %}
+          <option value="{{ option }}" {% if option == store %}selected{% endif %}>Shop {{ option }}</option>
+        {% endfor %}
+      </select>
+      <small>Changing the shop reloads the items it stocks.</small>
+    </div>
+
+    <div class="field">
+      <label for="item">Item</label>
+      <select id="item" name="item" required>
+        {% for option in items %}
+          <option value="{{ option.item }}" {% if option.item == item %}selected{% endif %}>
+            {{ option.option_label }}
+          </option>
+        {% endfor %}
+      </select>
+      <small>
+        Busiest first. The source publishes no name or category for an item, so it is
+        identified by what it shifts on an ordinary day here.
+      </small>
+    </div>
+  </div>
+  {% else %}
   <div class="field">
     <label for="store">{{ entity_label|capitalize }}</label>
     <select id="store" name="store" required>
@@ -53,6 +84,7 @@
       shop's median day across <code>{{ date_min }}</code>&ndash;<code>{{ observed_through }}</code>.
     </small>
   </div>
+  {% endif %}
 
   {# Side by side where there is room. The shop selector keeps the full width because its
      options are sentences; a date and a four-item list do not need it. #}
@@ -68,6 +100,7 @@
       </small>
     </div>
 
+    {% if uses_promotions %}
     <div class="field">
       <label for="state_holiday">Kind of day</label>
       <select id="state_holiday" name="state_holiday">
@@ -81,12 +114,21 @@
         there would throw away the part that matters most.
       </small>
     </div>
+    {% endif %}
   </div>
 
+  {% if uses_promotions %}
   <div class="field checks">
     <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion running</label>
     <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
   </div>
+  {% else %}
+  {# Offering controls the deployed model never saw vary would invite input that cannot
+     change the answer, and then read as a broken form when it does not. #}
+  <p class="note">
+    This dataset records no promotions or holidays, so there is nothing here to set.
+  </p>
+  {% endif %}
 
   <button type="submit">Predict</button>
 </form>
@@ -144,7 +186,7 @@
     </div>
     {% endif %}
     <div class="answer regression">
-      <span class="label">Predicted sales for the day</span>
+      <span class="label">Predicted {% if unit == "units" %}units for the day{% else %}sales for the day{% endif %}</span>
       <span class="value">{{ sales }}</span>
       <small>{{ regressor|replace('_', ' ') }}</small>
       {% if verdict %}
@@ -153,7 +195,7 @@
       {% endif %}
     </div>
     <div class="answer classification class-{{ demand_class|lower }}">
-      <span class="label">Demand class for this store</span>
+      <span class="label">Demand class for this {{ entity_label }}</span>
       <span class="value">{{ demand_class }}</span>
       <small>{{ classifier|replace('_', ' ') }}</small>
     </div>

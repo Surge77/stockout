@@ -56,9 +56,15 @@ def _provenance(request: Request) -> dict[str, Any]:
     artifact = getattr(models, "artifact", None)
     if artifact is None:
         return {}
+    name = getattr(artifact, "dataset", None)
     return {
-        "data_name": getattr(artifact, "dataset", None),
-        "data_is_real": getattr(artifact, "dataset", None) != "synthetic",
+        "data_name": name,
+        "data_is_real": name not in ("synthetic", "synthetic_products", None),
         "data_entities": len(getattr(artifact, "entities", []) or []),
         "data_entity_label": getattr(artifact, "entity_label", "store"),
+        "data_unit": getattr(artifact, "unit", "currency"),
+        # Which pages this deployment can answer. In the nav on every page, so they are
+        # derived here rather than added to each route's context and forgotten in one.
+        "data_has_products": bool(getattr(artifact, "has_products", False)),
+        "data_supports_description": getattr(artifact, "cold_regressor", None) is not None,
     }

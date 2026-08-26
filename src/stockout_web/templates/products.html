@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Shelf — stockout{% endblock %}
+
+{% block content %}
+<h1>What to order</h1>
+
+{% if not available %}
+{# A store-day deployment has no shelf. Saying so beats a 404: the visitor followed a
+   real link, and what changed is which dataset is deployed, not the URL. #}
+<section class="card">
+  <p class="lede">
+    This page ranks every item a shop stocks, and the deployed models are fitted on
+    <strong>{{ dataset }}</strong> — which records one row per {{ entity_label }}-day, with
+    no product axis at all. There is no shelf here to rank.
+  </p>
+  <p class="note">
+    An admin can deploy a product dataset from <a href="/admin">the dashboard</a>. Until
+    then, <a href="/">the forecast page</a> answers what a whole shop will take.
+  </p>
+</section>
+{% else %}
+
+<p class="lede">
+  Pick a shop and a day. Every item it stocks is scored at once and listed busiest first,
+  each one judged against <em>its own</em> usual — so a big seller having a quiet day and a
+  slow item having a busy one both show up.
+</p>
+
+<details class="explainer">
+  <summary>How to read this list</summary>
+  <div class="explainer-body">
+    <p>
+      The order is by <strong>predicted {{ unit }}</strong>, which is what fills a shelf.
+      The band beside each row is something else: whether that number is high or low
+      <em>for that item in this shop</em>. The two disagree often, and usefully — the
+      busiest item on the list can still be having a quiet day.
+    </p>
+    <p>
+      Every item is a separate series with its own cut points and its own trend line, so
+      &ldquo;busy&rdquo; never means &ldquo;sells more than the other items&rdquo;.
+    </p>
+    <p class="note">
+      Nothing describing an item is published by the source — no name, no category, no
+      price. An item is its number and its history, which is why this page identifies them
+      by what they shift rather than by what they are.
+    </p>
+  </div>
+</details>
+
+<form method="post" action="/products" class="card">
+  <div class="field-row">
+    <div class="field">
+      <label for="store">Shop</label>
+      <select id="store" name="store" required>
+        {% for option in stores %}
+          <option value="{{ option }}" {% if option == store %}selected{% endif %}>
+            Shop {{ option }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="date">Date</label>
+      <input type="date" id="date" name="date" required
+             value="{{ date or observed_through }}" min="{{ date_min }}">
+      <small>
+        Data runs to <code>{{ observed_through }}</code>. Later dates are answered as
+        forecasts &mdash; each item's own trend line carries the level out there.
+      </small>
+    </div>
+  </div>
+
+  {# Hidden where the deployed model never saw them vary. Offering a promotion checkbox
+     against a dataset that records no promotions invites input that cannot change an
+     answer, and then looks broken when it does not. #}
+  {% if uses_promotions %}
+  <div class="field">
+    <label for="state_holiday">Kind of day</label>
+    <select id="state_holiday" name="state_holiday">
+      {% for code, label in state_holidays %}
+        <option value="{{ code }}" {% if code == state_holiday|default('0') %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field checks">
+    <label class="check"><input type="checkbox" name="promo" value="true" {% if promo %}checked{% endif %}> Promotion running</label>
+    <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
+  </div>
+  {% else %}
+  <p class="note">
+    <strong>{{ dataset }}</strong> records no promotions or holidays, so the models never
+    saw them vary and there is nothing here to set. Every day is a trading day.
+  </p>
+  {% endif %}
+
+  <button type="submit">Rank the shelf</button>
+</form>
+
+{% if ranked %}
+<section class="card result">
+  <h2>Shop {{ ranked.store }} — {{ ranked.date.strftime('%A %d %B %Y') }}</h2>
+
+  {% if caveat %}
+  <p class="caveat" role="note"><strong>Forecast.</strong> {{ caveat }}</p>
+  {% endif %}
+
+  <div class="answers">
+    <div class="answer regression">
+      <span class="label">Predicted across the whole shelf</span>
+      <span class="value">{{ total }}</span>
+      <small>{{ unit }} &middot; {{ ranked|length }} items &middot; {{ regressor|replace('_', ' ') }}</small>
+    </div>
+  </div>
+
+  <table class="shelf">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th class="num">Predicted</th>
+        <th>Share of the busiest</th>
+        <th>For this item</th>
+        <th class="num">vs its usual</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="item-id">{{ row.item }}</td>
+        <td class="num">{{ '{:,.0f}'.format(row.sales) }}</td>
+        <td class="bar-cell">
+          {# Width against the busiest item, so the column reads as a shape rather than as
+             twenty-five numbers. Not a share of the total: that would make every bar tiny
+             on a long shelf. #}
+          <span class="bar" style="width: {{ (row.sales / peak * 100)|round(1) }}%"
+                role="img" aria-label="{{ '{:,.0f}'.format(row.sales) }} {{ unit }}"></span>
+        </td>
+        <td><b class="tag class-{{ row.demand_class|lower }}">{{ row.demand_class }}</b></td>
+        <td class="num">
+          {% if row.typical %}
+            {{ '{:+,.0f}'.format(row.difference_percent) }}%
+          {% else %}
+            &mdash;
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if hidden %}
+  <p class="note">{{ hidden }} quieter item{{ '' if hidden == 1 else 's' }} not shown.</p>
+  {% endif %}
+
+  <p class="cuts">
+    <strong>Why the order and the band disagree.</strong>
+    The list is sorted by how many {{ unit }} each item will shift, which is what an order
+    is made of. The band says whether that figure is unusual <em>for that item</em> —
+    its days sorted into its own quietest, middle and busiest thirds. A big seller can top
+    the list and still be having a quiet day for itself, and that is the row worth looking
+    at twice.
+  </p>
+  <p class="note">
+    The count comes from {{ regressor|replace('_', ' ') }} and the band from
+    {{ classifier|replace('_', ' ') }}. They are fitted separately and can disagree;
+    neither corrects the other.
+  </p>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

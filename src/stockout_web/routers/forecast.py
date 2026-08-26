@@ -43,7 +43,7 @@ STATE_HOLIDAYS: tuple[tuple[str, str], ...] = (
 _HOLIDAY_CODES = frozenset(code for code, _ in STATE_HOLIDAYS)
 
 
-def _holiday_code(raw: str) -> str:
+def holiday_code(raw: str) -> str:
     """The submitted kind of day, or a refusal.
 
     A `<select>` constrains a browser, not a request. Without this an unrecognised code
@@ -74,6 +74,12 @@ def _context(request: Request) -> dict[str, object]:
         "options": service.store_options(),
         "state_holidays": STATE_HOLIDAYS,
         "entity_label": service.entity_label(),
+        # A product deployment picks a shop and then an item. One dropdown of every
+        # store-item pair would be five hundred entries where two are ten and fifty.
+        "has_products": service.has_products(),
+        "unit": service.unit(),
+        "uses_promotions": service.catalogue.uses_promotions(),
+        "stores": service.stores() if service.has_products() else [],
         "date_min": start,
         # The last day with a true figure. No longer the picker's `max` — the input is
         # open-ended forward now, and this is the line the page draws between "checkable
@@ -88,7 +94,14 @@ def _context(request: Request) -> dict[str, object]:
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, user: CurrentUser) -> HTMLResponse:
     """The forecast form. Requires an account; `current_user` turns absence into a 401."""
-    return page(request, "forecast.html", _context(request))
+    context = _context(request)
+    service = _service(request)
+    if service.has_products():
+        # The item list belongs to a shop, and no shop is chosen yet — so open on the
+        # first one, which is also what the shop dropdown will be showing.
+        first = service.stores()[0]
+        context.update({"store": first, "items": service.item_options(first)})
+    return page(request, "forecast.html", context)
 
 
 @router.post("/forecast", response_class=HTMLResponse)
@@ -97,32 +110,37 @@ async def make_forecast(
     user: CurrentUser,
     store: Annotated[str, Form()],
     date: Annotated[str, Form()],
+    item: Annotated[str | None, Form()] = None,
     promo: Annotated[bool, Form()] = False,
     school_holiday: Annotated[bool, Form()] = False,
     state_holiday: Annotated[str, Form()] = "0",
 ) -> HTMLResponse:
-    """Answer one store-day with both models, or explain why it cannot be answered."""
+    """Answer one entity-day with both models, or explain why it cannot be answered."""
     context = _context(request)
     # Every submitted field goes back into the context, including the checkboxes. A form
     # that silently drops one on re-render tells the user their last answer came from
     # inputs they can no longer see.
+    service = _service(request)
     context.update(
         {
             "store": store,
+            "item": item,
             "date": date,
             "promo": promo,
             "school_holiday": school_holiday,
             "state_holiday": state_holiday,
+            "items": service.item_options(store) if service.has_products() else [],
         }
     )
+    entity = service.entity_for(store, item)
 
     try:
-        answer = _service(request).forecast(
-            entity=store,
+        answer = service.forecast(
+            entity=entity,
             date=date,
             promo=promo,
             school_holiday=school_holiday,
-            state_holiday=_holiday_code(state_holiday),
+            state_holiday=holiday_code(state_holiday),
         )
     except StockoutError as exc:
         context["error"] = str(exc)
@@ -133,7 +151,7 @@ async def make_forecast(
     # answer to "why not just look it up" — inside the window that is exactly what this
     # page now does, and putting the error on screen is more honest than hiding the
     # comparison the visitor could make anyway.
-    actual = _service(request).actual_for(store, answer.date)
+    actual = service.actual_for(entity, answer.date)
     context.update(
         {
             "actual": None if actual is None else f"{actual:,.0f}",
@@ -146,7 +164,7 @@ async def make_forecast(
             "answer": answer,
             # The same prediction, phrased for somebody deciding how much to order. The
             # models speak in terciles and r²; `Verdict` is the whole translation.
-            "verdict": _service(request).verdict(answer),
+            "verdict": service.verdict(answer),
             "sales": f"{answer.sales:,.0f}",
             "demand_class": answer.demand_class,
             "low_cut": f"{low:,.0f}",
@@ -154,7 +172,7 @@ async def make_forecast(
             "per_model": sorted(
                 answer.per_model.items(), key=lambda pair: pair[1], reverse=True
             )[:MAX_COMPARISON_MODELS],
-            "deployed": _service(request).artifact.regressor_name,
+            "deployed": service.artifact.regressor_name,
         }
     )
     return page(request, "forecast.html", context)
@@ -185,6 +203,12 @@ def _whatif_context(request: Request) -> dict[str, object]:
     service = _service(request)
     start, end = service.date_bounds()
     return {
+        # False where the source publishes nothing describing an entity, so no cold-start
+        # model exists to answer with. The page explains that rather than offering a form
+        # whose every answer would be the same number.
+        "available": service.supports_description(),
+        "dataset": service.artifact.dataset,
+        "entity_label": service.entity_label(),
         "store_types": STORE_TYPES,
         "assortments": ASSORTMENTS,
         "state_holidays": STATE_HOLIDAYS,
@@ -231,7 +255,7 @@ async def whatif(
             promo2=promo2,
             date=date,
             promo=promo,
-            state_holiday=_holiday_code(state_holiday),
+            state_holiday=holiday_code(state_holiday),
             school_holiday=school_holiday,
         )
     except StockoutError as exc:

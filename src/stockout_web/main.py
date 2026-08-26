@@ -21,7 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from stockout.errors import StockoutError
 
 from . import config, db, users
-from .routers import admin, forecast
+from .routers import admin, forecast, products
 from .routers import auth as auth_routes
 from .service import ModelService
 from .templating import page
@@ -108,6 +108,7 @@ app.mount("/static", StaticFiles(directory=str(config.STATIC_DIR)), name="static
 
 app.include_router(auth_routes.router)
 app.include_router(forecast.router)
+app.include_router(products.router)
 app.include_router(admin.router)
 
 

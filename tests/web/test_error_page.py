@@ -23,17 +23,20 @@ from stockout_web.users import User
 PLAIN_USER = User(id=2, email="plain@example.com", role="user", is_active=True, created_at="now")
 
 
-@pytest.fixture(scope="module")
-def client() -> Iterator[TestClient]:
-    """A signed-in non-admin. Overridden rather than logged in, so no database is needed.
+@pytest.fixture
+def client(client: TestClient) -> Iterator[TestClient]:
+    """A signed-in non-admin, on the shared stubbed app.
 
-    Module-scoped because entering `TestClient` runs the app's lifespan, and that fits
-    every registered regressor — about twenty seconds. Per-test would pay it four times
-    over for a set of assertions that never touch a model.
+    Overrides `conftest.client` — pytest lets a fixture request the same name from an
+    outer scope — so this inherits the stubbed `ModelService` rather than booting the real
+    one. It used to build its own `TestClient` against the live app, which ran the lifespan
+    for real: acceptable at twenty seconds against the synthetic sample, twenty *minutes*
+    once the deployed artefact was Rossmann, for four assertions that never touch a model.
+
+    The user is overridden rather than logged in, so no password round-trip is needed.
     """
     app.dependency_overrides[current_user] = lambda: PLAIN_USER
-    with TestClient(app) as test_client:
-        yield test_client
+    yield client
     app.dependency_overrides.clear()
 
 

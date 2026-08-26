@@ -6,6 +6,15 @@ tens of megabytes, so doing it per request would make every page load pay for it
 Retraining swaps the whole object rather than mutating it in place. A request that arrives
 mid-retrain therefore sees either the old models or the new ones, never a half-swapped pair
 where the regressor has been replaced and the thresholds have not.
+
+Three collaborators, each holding one question, so this file stays about *answering a
+request*: `catalogue.py` knows what can be asked about, `benchmarks.py` knows how every
+model scores, and `presentation.py` with `verdict.py` know how to say it.
+
+**The deployed dataset decides what the app offers.** A product artefact makes the ranked
+shelf available and the described-shop page unanswerable; a store-day artefact does the
+reverse. The surfaces read `has_products` and `supports_description` rather than checking
+the dataset's name.
 """
 
 from __future__ import annotations
@@ -16,32 +25,22 @@ from typing import Any
 
 import pandas as pd
 
-from stockout import persistence
+from stockout import persistence, ranking
 from stockout import train as training
-from stockout.config import Task
-from stockout.data.schemas import DATE as SCHEMA_DATE
-from stockout.data.schemas import ENTITY as SCHEMA_ENTITY
-from stockout.data.schemas import SALES as SCHEMA_SALES
 from stockout.datasets import Prepared, prepare
 from stockout.errors import StockoutError
-from stockout.evaluate import compare, split
-from stockout.hypothetical import (
-    HypotheticalPrediction,
-    StoreDescription,
-    contributions,
-    predict_described,
-)
+from stockout.hypothetical import HypotheticalPrediction
 from stockout.persistence import Artifact
 from stockout.predict import Prediction, compare_row, predict
-from stockout.registry import build, model_names
+from stockout.ranking import Ranking
 
-from .presentation import StoreProfile, Verdict, build_profiles
+from .benchmarks import Benchmarks, cards, fit_every_regressor
+from .catalogue import Catalogue, actual_for
+from .described import describe as describe_shop
+from .presentation import StoreProfile, build_profiles
+from .verdict import Verdict
 
 DEFAULT_DATASET = "synthetic"
-
-#: Fitting all seven regressors so the user page can show that they disagree costs about
-#: twenty seconds. Done once at startup and on retrain, never per request.
-COMPARISON_MODELS: tuple[str, ...] = model_names("regression")
 
 
 @dataclass
@@ -51,45 +50,89 @@ class ModelService:
     artifact: Artifact
     prepared: Prepared
     others: dict[str, Any] = field(default_factory=dict)
-    profiles: dict[str, StoreProfile] = field(default_factory=dict)
+    catalogue: Catalogue = field(init=False)
+    benchmarks: Benchmarks = field(init=False)
 
-    #: Comparison tables, memoised per task. `compare` refits every registered model on
-    #: the split, so an uncached `/admin/comparison` re-ran thirteen fits on every page
-    #: load. The result depends only on `prepared` and the seed, both fixed for the life
-    #: of this object, and a retrain builds a new object — so the cache cannot go stale.
-    _tables: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)
-    _floor: float | None = field(default=None, repr=False)
+    def __post_init__(self) -> None:
+        self.catalogue = Catalogue(
+            artifact=self.artifact,
+            profiles=build_profiles(
+                self.prepared.frame,
+                self.artifact.thresholds,
+                self.prepared.stores,
+                has_products=self.artifact.has_products,
+                unit=self.artifact.unit,
+            ),
+        )
+        self.benchmarks = Benchmarks(prepared=self.prepared)
 
     @classmethod
     def load(cls, dataset: str = DEFAULT_DATASET) -> ModelService:
-        """Read the saved artefact, or train one if this is a first run."""
-        prepared = prepare(dataset)
+        """Read the saved artefact, or train one if this is a first run.
+
+        The frame comes from the **artefact's** dataset, not from the argument: serving one
+        source's models beside another source's frame would draw every "what it actually
+        took" figure from the wrong file. `dataset` only decides what a first run fits.
+
+        An artefact that exists but cannot be read is a refusal, not an invitation to fit a
+        replacement — see the raise below.
+        """
+        if not persistence.exists():
+            prepared = prepare(dataset)
+            artifact, _ = training.train(prepared)
+            return cls(artifact=artifact, prepared=prepared, others=fit_every_regressor(prepared))
+
         try:
             artifact = persistence.load()
-        except StockoutError:
-            artifact, _ = training.train(prepared)
-        return cls(
-            artifact=artifact,
-            prepared=prepared,
-            others=_fit_others(prepared),
-            profiles=build_profiles(prepared.frame, artifact.thresholds, prepared.stores),
-        )
+        except StockoutError as exc:
+            # This used to catch every StockoutError and retrain on the default source, so
+            # bumping ARTIFACT_VERSION silently replaced a deployment trained on real data
+            # with one trained on the synthetic sample — same filename, same pages,
+            # different dataset, nothing on screen saying so. `artifacts/` is not in
+            # version control, so that loss is recoverable only by retraining.
+            raise StockoutError(
+                f"{exc} Refusing to fit a replacement automatically: the saved artefact "
+                f"may have been trained on a different dataset, and overwriting it here "
+                f"would lose that silently. Retrain deliberately with "
+                f"`python -m stockout train --dataset <name>`."
+            ) from exc
 
-    # -- reads -------------------------------------------------------------
+        prepared = prepare(artifact.dataset)
+        return cls(artifact=artifact, prepared=prepared, others=fit_every_regressor(prepared))
 
-    def entities(self) -> list[str]:
-        return self.artifact.entities
+    # -- what can be asked -------------------------------------------------
 
     def store_options(self) -> list[StoreProfile]:
-        """Profiles in the dropdown's order: quietest store first, so the list reads
-        as a range rather than as an arbitrary sequence of numbers."""
-        return sorted(self.profiles.values(), key=lambda p: p.typical_sales)
+        return self.catalogue.entity_options()
+
+    def item_options(self, store: str) -> list[StoreProfile]:
+        return self.catalogue.item_options(store)
+
+    def stores(self) -> list[str]:
+        return self.catalogue.stores()
 
     def profile_for(self, entity: str) -> StoreProfile | None:
-        return self.profiles.get(str(entity))
+        return self.catalogue.profile_for(entity)
+
+    def entity_for(self, store: str, item: str | None) -> str:
+        return self.catalogue.entity_for(store, item)
 
     def entity_label(self) -> str:
         return self.artifact.entity_label
+
+    def unit(self) -> str:
+        return self.artifact.unit
+
+    def has_products(self) -> bool:
+        return self.artifact.has_products
+
+    def supports_description(self) -> bool:
+        """Whether the described-shop page can answer at all on this deployment.
+
+        False where no cold-start model was fitted, which happens when the source
+        publishes nothing describing an entity — see `train._fit_cold_start`.
+        """
+        return self.artifact.cold_regressor is not None
 
     def date_bounds(self) -> tuple[str, str]:
         """The span for which a true figure exists — the form's `min`, and its divider.
@@ -101,26 +144,9 @@ class ModelService:
         return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
     def actual_for(self, entity: str, date: str | pd.Timestamp) -> float | None:
-        """What the store really took that day, where the dataset records it.
+        return actual_for(self.prepared, entity, date)
 
-        This is the honest reply to the obvious objection: inside the fitted window a
-        prediction is redundant, because the answer is already in the file. Rather than
-        hide that, the panel shows both and lets the error stand next to the guess — which
-        turns the redundancy from an embarrassment into the only place on the site where a
-        visitor can watch the model be checked against something it cannot argue with.
-
-        `None` for a day with no row: dates past the data, and closed days, which
-        `features.drop_closed` removes before anything is fitted.
-        """
-        frame = self.prepared.frame
-        stamp = pd.to_datetime(date)
-        rows = frame[
-            (frame[SCHEMA_ENTITY].astype("string") == str(entity))
-            & (pd.to_datetime(frame[SCHEMA_DATE]) == stamp)
-        ]
-        if rows.empty:
-            return None
-        return float(rows[SCHEMA_SALES].iloc[0])
+    # -- answers -----------------------------------------------------------
 
     def forecast(
         self,
@@ -131,7 +157,7 @@ class ModelService:
         state_holiday: str = "0",
         school_holiday: bool = False,
     ) -> Prediction:
-        """Both answers for one store-day, plus what every other regressor said."""
+        """Both answers for one entity-day, plus what every other regressor said."""
         answer = predict(
             self.artifact,
             entity=entity,
@@ -149,6 +175,26 @@ class ModelService:
         )
         return answer
 
+    def rank_products(
+        self,
+        *,
+        store: str,
+        date: str,
+        promo: bool = False,
+        state_holiday: str = "0",
+        school_holiday: bool = False,
+    ) -> Ranking:
+        """Every item one shop stocks on one day, busiest first, scored in one pass."""
+        return ranking.rank(
+            self.artifact,
+            store=store,
+            date=date,
+            promo=promo,
+            state_holiday=state_holiday,
+            school_holiday=school_holiday,
+            typical=self.catalogue.typical(),
+        )
+
     def describe(
         self,
         *,
@@ -161,26 +207,18 @@ class ModelService:
         state_holiday: str = "0",
         school_holiday: bool = False,
     ) -> tuple[HypotheticalPrediction, list[tuple[str, float]]]:
-        """Answer for a shop that does not exist, and say what each attribute was worth.
-
-        Uses `artifact.cold_regressor`, not the deployed one — see `stockout.hypothetical`
-        for why a model that knows store ids is the wrong tool for a store with no id.
-        """
-        description = StoreDescription(
+        """Answer for a shop that does not exist, and say what each attribute was worth."""
+        return describe_shop(
+            self.artifact,
             store_type=store_type,
             assortment=assortment,
             competition_distance=competition_distance,
             promo2=promo2,
+            date=date,
+            promo=promo,
+            state_holiday=state_holiday,
+            school_holiday=school_holiday,
         )
-        answer = predict_described(
-            self.artifact, description, date=date, promo=promo,
-            state_holiday=state_holiday, school_holiday=school_holiday,
-        )
-        why = contributions(
-            self.artifact, description, date=date, promo=promo,
-            state_holiday=state_holiday, school_holiday=school_holiday,
-        )
-        return answer, why
 
     def verdict(self, answer: Prediction) -> Verdict | None:
         """The prediction, phrased for somebody deciding how much to order."""
@@ -227,51 +265,13 @@ class ModelService:
             school_holiday=school_holiday,
         )
 
-    def comparison(self, task: Task = "regression") -> pd.DataFrame:
-        """Every registered model scored on the split, fitted once and kept."""
-        if task not in self._tables:
-            self._tables[task] = compare(self.prepared, task)
-        return self._tables[task]
-
-    def class_floor(self) -> float:
-        """The share of the largest class: what "always guess the commonest" would score.
-
-        Cached with the tables. It re-derives the split, which is cheap, but it is asked
-        for on the same page and there is no reason to do it twice.
-        """
-        if self._floor is None:
-            data = split(self.prepared, "classification")
-            counts = data.Y_test.value_counts(normalize=True)
-            self._floor = float(counts.iloc[0]) if len(counts) else 0.0
-        return self._floor
+    # -- the admin pages ---------------------------------------------------
 
     async def comparison_tables(self) -> tuple[pd.DataFrame, pd.DataFrame, float]:
-        """Both tables and the majority-class floor, computed off the event loop.
-
-        `compare` fits every registered model for a task. Doing that inside an `async def`
-        handler blocks the single event loop thread, so one admin opening this page froze
-        every other request — including other people's forecasts — until it finished.
-        """
-        return await asyncio.to_thread(self._comparison_blocking)
-
-    def _comparison_blocking(self) -> tuple[pd.DataFrame, pd.DataFrame, float]:
-        return self.comparison("regression"), self.comparison("classification"), self.class_floor()
+        return await self.benchmarks.tables()
 
     def cards(self) -> list[dict[str, Any]]:
-        """One card per deployed model for the dashboard, with an honest metric name.
-
-        A regressor has no accuracy. Labelling `r2` as "Model Accuracy" would put a number
-        on the page that cannot exist, so the label comes from the task.
-        """
-        scores = self.artifact.scores
-        return [
-            _card(self.artifact.regressor_name, "R² Score", scores.get("regression", {}).get("r2")),
-            _card(
-                self.artifact.classifier_name,
-                "Accuracy",
-                scores.get("classification", {}).get("accuracy"),
-            ),
-        ]
+        return cards(self.artifact)
 
     # -- writes ------------------------------------------------------------
 
@@ -287,29 +287,5 @@ class ModelService:
         prepared = self.prepared if dataset == self.prepared.name else prepare(dataset)
         artifact, _ = training.train(prepared, regressor=regressor, classifier=classifier)
         return ModelService(
-            artifact=artifact,
-            prepared=prepared,
-            others=_fit_others(prepared),
-            profiles=build_profiles(prepared.frame, artifact.thresholds, prepared.stores),
+            artifact=artifact, prepared=prepared, others=fit_every_regressor(prepared)
         )
-
-
-def _card(name: str, metric: str, value: float | None) -> dict[str, Any]:
-    share = 0.0 if value is None else max(0.0, min(1.0, float(value)))
-    return {
-        "name": name.replace("_", " ").title(),
-        "metric": metric,
-        "value": "n/a" if value is None else f"{value:,.4f}",
-        "percent": round(share * 100),
-    }
-
-
-def _fit_others(prepared: Prepared) -> dict[str, Any]:
-    """Fit every regressor once so the user page can show the spread between them."""
-    data = split(prepared, "regression")
-    fitted: dict[str, Any] = {}
-    for name in COMPARISON_MODELS:
-        model = build(name, task="regression")
-        model.fit(data.X_train, data.Y_train)
-        fitted[name] = model
-    return fitted

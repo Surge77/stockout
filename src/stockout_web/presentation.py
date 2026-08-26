@@ -1,12 +1,15 @@
-"""Turning model output into words a shopkeeper can act on.
+"""What one entity looks like, so a dropdown entry and a comparison mean something.
 
-The library speaks in r², terciles and class labels. A person looking at the page wants to
-know whether to order more stock. This module is the whole translation, kept out of
-`service.py` so that the modelling and the wording can be changed independently.
+A dropdown of bare ids tells a reader nothing. A profile turns each one into a sentence:
+what kind of shop it is, or which item in which shop, and what an ordinary day there looks
+like — the context every number further down the page is relative to.
 
-Nothing here computes anything new. It renames, compares and phrases what the models
-already produced — and where it makes a claim about how good a number is, that claim comes
-from the held-out score rather than from an adjective.
+Two shapes, because the sources have two. A store-day entity is described by the metadata
+Rossmann publishes about it. A store-item entity has no metadata at all, so it is described
+by the only things that exist: which shop, which item, and its own usual day.
+
+Nothing here computes anything new. It renames and phrases what the models already
+produced. `verdict.py` holds the phrasing of a single prediction; this holds the entities.
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ from dataclasses import dataclass
 import pandas as pd
 
 from stockout.data import schemas as s
-from stockout.targets import HIGH, LOW, MEDIUM
 
 #: Rossmann's own documented meaning for the assortment codes. `store_type` a/b/c/d is
 #: anonymised in the source and has no published meaning, so it is shown as a bare letter
@@ -43,37 +45,13 @@ STORE_GROUP_LABELS: dict[str, str] = {
     "d": "shop group D",
 }
 
-#: What each demand class means for somebody deciding how much to order.
-DEMAND_WORDS: dict[str, dict[str, str]] = {
-    LOW: {
-        "title": "Quiet day",
-        "advice": "Below this store's usual. Ordering the normal amount risks leftover stock.",
-        "tone": "quiet",
-    },
-    MEDIUM: {
-        "title": "Typical day",
-        "advice": "An ordinary day for this store. The usual order should be about right.",
-        "tone": "typical",
-    },
-    HIGH: {
-        "title": "Busy day",
-        "advice": "Above this store's usual. Order extra so you do not run out.",
-        "tone": "busy",
-    },
-}
-
 _KM = 1000.0
 _PERCENT = 100.0
-
-#: Headroom added to each end of the scale bar, as a fraction of its span. Enough that the
-#: outer bands are always visible; small enough that the marker still sits where the
-#: numbers say it should.
-_AXIS_PADDING = 0.15
 
 
 @dataclass(frozen=True)
 class StoreProfile:
-    """What one store looks like, so a dropdown entry means something."""
+    """What one entity looks like, so a dropdown entry means something."""
 
     entity: str
     store_type: str
@@ -84,6 +62,26 @@ class StoreProfile:
     competition_km: float | None
     has_promo2: bool
     days: int
+
+    #: The two halves of a store-item entity, empty on a store-day one. Split once here
+    #: rather than in each template that wants to say "item 7 in store 3".
+    store: str = ""
+    item: str = ""
+
+    #: What `typical_sales` counts, so the wording can say "units" where that is the truth
+    #: and stay silent where the figure is a till total in an unstated currency.
+    unit: str = "currency"
+
+    @property
+    def is_product(self) -> bool:
+        return bool(self.item)
+
+    @property
+    def amount_text(self) -> str:
+        """`typical_sales` with its unit, where there is one worth naming."""
+        if self.unit == "units":
+            return f"{self.typical_sales:,.0f} units"
+        return f"{self.typical_sales:,.0f}"
 
     @property
     def assortment_label(self) -> str:
@@ -97,7 +95,15 @@ class StoreProfile:
 
     @property
     def option_label(self) -> str:
-        """The text in the dropdown. A bare id tells a reader nothing."""
+        """The text in the dropdown. A bare id tells a reader nothing.
+
+        A product source publishes nothing describing an item — no name, no category, no
+        price — so there is no honest way to say what item 7 *is*. What can be said is
+        what it does: how much of it this shop shifts on an ordinary day, which is also
+        the figure every prediction below is relative to.
+        """
+        if self.is_product:
+            return f"Item {self.item} — about {self.amount_text} on a normal day here"
         return (
             f"Shop {self.entity} — {self.type_label}, {self.assortment_label}, "
             f"takes about {self.typical_sales:,.0f} on a normal day"
@@ -112,143 +118,20 @@ class StoreProfile:
         return f"Nearest competitor {self.competition_km:,.1f} km away"
 
 
-@dataclass(frozen=True)
-class Verdict:
-    """One prediction, phrased."""
-
-    sales: float
-    demand_class: str
-    profile: StoreProfile
-    spread_low: float
-    spread_high: float
-
-    @property
-    def title(self) -> str:
-        return DEMAND_WORDS[self.demand_class]["title"]
-
-    @property
-    def advice(self) -> str:
-        return DEMAND_WORDS[self.demand_class]["advice"]
-
-    @property
-    def tone(self) -> str:
-        return DEMAND_WORDS[self.demand_class]["tone"]
-
-    @property
-    def implied_class(self) -> str:
-        """The class the predicted *number* falls into, by this store's own cut points.
-
-        Not the same thing as `demand_class`, which is what the classifier said. Two
-        models, two answers, and nothing forces them to agree.
-        """
-        if self.sales < self.profile.quiet_cut:
-            return LOW
-        if self.sales > self.profile.busy_cut:
-            return HIGH
-        return MEDIUM
-
-    @property
-    def models_disagree(self) -> bool:
-        return self.implied_class != self.demand_class
-
-    @property
-    def disagreement_text(self) -> str:
-        """Said plainly, because the panel would otherwise contradict itself.
-
-        `advice` is written from the classifier's label and `comparison_text` from the
-        regressor's number. When the two models split, those two lines say opposite
-        things one after the other — "below this store's usual" directly above "about the
-        same as this store's usual" — which reads as a broken page rather than as the
-        honest disagreement it is. Naming it turns a bug report into the point.
-        """
-        if not self.models_disagree:
-            return ""
-        return (
-            f"The two models disagree here. {self.sales:,.0f} falls in "
-            f"{self.implied_class} by this store's cut points, while the demand "
-            f"classifier calls it {self.demand_class}. Neither corrects the other — "
-            f"treat the day as borderline."
-        )
-
-    @property
-    def difference_percent(self) -> float:
-        if not self.profile.typical_sales:
-            return 0.0
-        return (self.sales - self.profile.typical_sales) / self.profile.typical_sales * _PERCENT
-
-    @property
-    def comparison_text(self) -> str:
-        """How this compares with the store's own usual day, in one sentence."""
-        difference = self.difference_percent
-        usual = f"{self.profile.typical_sales:,.0f}"
-        if abs(difference) < 5:
-            return f"About the same as this store's usual {usual} a day."
-        direction = "more than" if difference > 0 else "less than"
-        return f"{abs(difference):,.0f}% {direction} this store's usual {usual} a day."
-
-    @property
-    def arrow(self) -> str:
-        difference = self.difference_percent
-        if abs(difference) < 5:
-            return "="
-        return "up" if difference > 0 else "down"
-
-    def _axis(self) -> tuple[float, float]:
-        """The range the bar spans, with room beyond both cut points.
-
-        Taking the axis straight from `min`/`max` of the values collapses an outer band
-        to zero width whenever nothing exceeds its cut point — which is the normal case.
-        A prediction below `quiet_cut` puts `busy_cut` at exactly 100%, the busy band
-        renders zero pixels wide, and the bar silently claims this store is never busy.
-        The padding keeps all three bands on screen so the marker is read against a
-        complete scale rather than a truncated one.
-        """
-        values = (
-            self.sales,
-            self.spread_low,
-            self.spread_high,
-            self.profile.quiet_cut,
-            self.profile.busy_cut,
-        )
-        low, high = min(values), max(values)
-        span = high - low
-        padding = span * _AXIS_PADDING if span > 0 else max(abs(high) * _AXIS_PADDING, 1.0)
-        return low - padding, high + padding
-
-    def _position(self, value: float) -> float:
-        """`value` as a 0-100 percentage of the axis."""
-        low, high = self._axis()
-        span = high - low
-        if span <= 0:
-            return 50.0
-        return max(0.0, min(_PERCENT, (value - low) / span * _PERCENT))
-
-    def scale_position(self) -> float:
-        """Where the prediction sits on this store's own range, as a 0-100 percentage.
-
-        The bar shows quiet / typical / busy as three bands and marks the prediction on
-        them, which answers "is that a lot?" without the reader having to hold three
-        numbers in their head.
-        """
-        return self._position(self.sales)
-
-    def band_edges(self) -> tuple[float, float]:
-        """The quiet/typical and typical/busy boundaries, as percentages of the bar."""
-        return self._position(self.profile.quiet_cut), self._position(self.profile.busy_cut)
-
-    @property
-    def spread_text(self) -> str:
-        width = self.spread_high - self.spread_low
-        return (
-            f"The models range from {self.spread_low:,.0f} to {self.spread_high:,.0f} "
-            f"— a spread of {width:,.0f}."
-        )
-
-
 def build_profiles(
-    frame: pd.DataFrame, thresholds, stores: pd.DataFrame | None
+    frame: pd.DataFrame,
+    thresholds,
+    stores: pd.DataFrame | None,
+    *,
+    has_products: bool = False,
+    unit: str = "currency",
 ) -> dict[str, StoreProfile]:
-    """One profile per store, from the prepared frame and the store metadata."""
+    """One profile per entity, from the prepared frame and whatever metadata exists.
+
+    `has_products` comes from the source rather than from the shape of the ids, for the
+    same reason `features.add_product_features` takes it: a store-day source's behaviour
+    must not depend on how its ids happen to be spelled.
+    """
     metadata = _metadata_lookup(stores)
     profiles: dict[str, StoreProfile] = {}
 
@@ -257,6 +140,7 @@ def build_profiles(
         key = str(entity)
         quiet, busy = thresholds.for_entity(key)
         facts = metadata.get(key, {})
+        store, item = _split_entity(key) if has_products else ("", "")
         profiles[key] = StoreProfile(
             entity=key,
             store_type=str(facts.get(s.STORE_TYPE, "") or ""),
@@ -267,8 +151,16 @@ def build_profiles(
             competition_km=_km(facts.get(s.COMPETITION_DISTANCE)),
             has_promo2=bool(facts.get(s.PROMO2, 0)),
             days=len(group),
+            store=store,
+            item=item,
+            unit=unit,
         )
     return profiles
+
+
+def _split_entity(entity: str) -> tuple[str, str]:
+    store, _, item = entity.partition(s.PRODUCT_ENTITY_SEPARATOR)
+    return store, item
 
 
 def _metadata_lookup(stores: pd.DataFrame | None) -> dict[str, dict[str, object]]:

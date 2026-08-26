@@ -332,3 +332,35 @@ caption { caption-side: top; text-align: left; color: var(--muted); font-size: .
 }
 
 details summary { cursor: pointer; font-weight: 600; }
+
+/* --- the shelf ---------------------------------------------------------------
+   The ranked-items table. Reuses the demand colours the forecast page already
+   uses for Low/Medium/High, so a band means the same thing on both pages. */
+table.shelf { width: 100%; border-collapse: collapse; margin: 1rem 0 .5rem; }
+table.shelf th {
+  text-align: left; font-size: .78rem; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted); font-weight: 600;
+  border-bottom: 1px solid var(--line); padding: .5rem .6rem;
+}
+table.shelf td { padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+table.shelf tr:last-child td { border-bottom: none; }
+table.shelf tbody tr:hover { background: var(--page); }
+
+/* The item id is the only name an item has — the source publishes no other. */
+.item-id {
+  font-variant-numeric: tabular-nums; font-weight: 600;
+  color: var(--muted); width: 4rem;
+}
+
+/* Width is a share of the busiest item, not of the shelf total: against the total
+   every bar on a long shelf collapses to a sliver and the column says nothing. */
+.bar-cell { width: 40%; min-width: 8rem; }
+.bar {
+  display: block; height: .55rem; border-radius: 999px;
+  background: var(--accent); opacity: .75; min-width: 2px;
+}
+
+/* Matches .answer.class-* above, as a pill for use inside a table row. */
+.tag.class-low { border-color: #c3c9d1; background: #f2f4f6; color: #5c6470; }
+.tag.class-medium { border-color: #e8d3a0; background: #fdf6e6; color: #8a6516; }
+.tag.class-high { border-color: #edbfb6; background: var(--warn-soft); color: var(--warn); }

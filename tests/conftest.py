@@ -39,6 +39,13 @@ _CLASSIFICATION_ROWS = pd.DataFrame(
 )
 
 
+class _StubCatalogue:
+    """Enough of `Catalogue` for the forms to decide which controls to render."""
+
+    def uses_promotions(self) -> bool:
+        return True
+
+
 class _StubService:
     """Enough surface for the routes under test; none of them predicts anything."""
 
@@ -53,6 +60,15 @@ class _StubService:
         n_test: int = 2
         entities: list[str] = field(default_factory=lambda: ["1"])
         thresholds: dict[str, tuple[float, float]] = field(default_factory=dict)
+        #: A store-day deployment, which is what most of these tests are about. The
+        #: product surfaces are covered against a real artefact in `test_products.py`;
+        #: what matters here is that the pages read these rather than the dataset name.
+        unit: str = "currency"
+        has_products: bool = False
+        cold_regressor: object = None
+        feature_columns: list[str] = field(
+            default_factory=lambda: ["entity_code", "promo", "state_holiday"]
+        )
         #: What the described-shop page reports about the model it uses. Empty here —
         #: the page renders the absence as "not measured", which is a state it has to
         #: handle anyway.
@@ -94,8 +110,31 @@ class _StubService:
             )
         ]
 
+    def item_options(self, store: str) -> list[StoreProfile]:
+        return []
+
+    def stores(self) -> list[str]:
+        return ["1"]
+
+    def entity_for(self, store: str, item: str | None) -> str:
+        return str(store)
+
     def entity_label(self) -> str:
         return "store"
+
+    def unit(self) -> str:
+        return "currency"
+
+    def has_products(self) -> bool:
+        return False
+
+    def supports_description(self) -> bool:
+        return True
+
+    @property
+    def catalogue(self) -> object:
+        """Only `uses_promotions` is read from here by the routes under test."""
+        return _StubCatalogue()
 
     def date_bounds(self) -> tuple[str, str]:
         return "2013-01-01", "2015-12-31"

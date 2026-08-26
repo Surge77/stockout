@@ -38,7 +38,7 @@ from .trend import StoreTrends
 
 #: Bumped whenever the artefact's shape changes. An old file read by new code is a worse
 #: failure than a refusal, because it usually half-works.
-ARTIFACT_VERSION = 7
+ARTIFACT_VERSION = 8
 
 
 @dataclass
