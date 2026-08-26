@@ -52,10 +52,15 @@ def _context(request: Request) -> dict[str, object]:
         "regressor": service.artifact.regressor_name,
         "classifier": service.artifact.classifier_name,
         # Shown beside the note about the two models disagreeing. Where the classifier is
-        # barely above its floor, saying so is what tells a reader which number to trust.
+        # barely above its floor, saying so is what tells a reader which number to trust —
+        # and the floor is measured rather than assumed. Per-entity terciles put it near a
+        # third by construction *in training*; on a chronological hold-out the residual
+        # distribution drifts and it reached 45% here, which a hardcoded 33% would have
+        # misreported as a much better classifier than it is.
         "classifier_accuracy": service.artifact.scores.get("classification", {}).get(
             "accuracy", 0.0
         ),
+        "class_floor": service.benchmarks.class_floor(),
     }
 
 

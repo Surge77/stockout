@@ -5,6 +5,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- **Demand per product, not only per shop.** A row can now be one shop-item-day with
+  `sales` in units, alongside the shop-day rows every source produced until now.
+  `schemas.ENTITY` and `Source.entity_label` were built for this and had one shape between
+  them.
+
+  Two new sources, mirroring the existing pair: `synthetic_products` is committed so the
+  product path runs offline on a fresh clone, and `store_item_demand` is Kaggle's data,
+  which cannot be redistributed. Both archives unpack a `train.csv`, so the product
+  competition gets its own subdirectory rather than silently overwriting Rossmann's.
+
+- **`store_code` and `item_code` as separate features.** Given only `entity_code` a model
+  must learn all 200 series levels from their own rows; given the two axes it learns twenty
+  item levels and ten store multipliers and composes them. Worth +0.009 r² on an ordinary
+  hold-out (0.8965 → 0.9058), where identity alone is nearly enough. The real gain is on a
+  store-item pair held out entirely: mean r² **−14.39** from identity alone against
+  **−0.39** from the two axes.
+
+- **`/products`, the shelf.** Pick a shop and a day; every item it stocks is scored in one
+  pass and listed busiest first, each row banded against its own cut points and compared
+  with its own fitted line at that date. `predict.serving_matrix` builds one frame for the
+  whole shelf — a test asserts it equals scoring each item alone. `stockout products` is
+  the CLI equivalent; `predict` gains `--item` and `fetch` gains `--dataset`.
+
+- **A source declares what it does not carry.** Product sources record no promotions and
+  publish nothing describing an item, so `feature_columns` drops those families and the
+  forms hide the controls. Ten of a product matrix's eighteen columns were constant filler.
+  Declared absence rather than measured constancy: `synthetic` holds one value in
+  `state_holiday` too, and dropping columns because *this sample* never varied would change
+  the matrix a published score was measured on.
+
+### Fixed
+
+- **`entity_code` did not survive serving.** `features._entity_codes` fell back to
+  `pd.factorize` for any entity id that is not numeric, and factorize numbers whatever
+  frame it is handed — position 1 of three entities during training, position 0 of one at
+  serving. Rossmann escaped it because its ids are numeric strings and are their own code;
+  a store-item id such as `"3_26"` is not, so every prediction would have answered about
+  whichever series sorted first. The entity ordering now travels in the artefact, and the
+  numeric fast path is kept so Rossmann's codes and published scores did not move.
+
+- **The comparison list answered a different question from the headline.** Models fitted
+  through a de-trended split answer in residuals; `service._every_model` returned those raw
+  while the headline added the store's line back, putting a figure near zero beside one near
+  five thousand — and `Verdict.spread_low`/`_high` read that list, so the printed range came
+  off the wrong scale too. It also dropped `state_holiday` and `school_holiday`, answering
+  an ordinary Tuesday while the headline answered Christmas.
+
+- **`ModelService.load` retrained over an artefact it could not read.** It caught every
+  `StockoutError` and refitted on the default source, so bumping `ARTIFACT_VERSION` silently
+  replaced a deployment trained on real data with one trained on the synthetic sample —
+  same filename, same pages, different dataset. `artifacts/` is not in version control, so
+  that loss is recoverable only by retraining. It now refuses with an instruction.
+
+- **The generated seasonal peak was a quarter-year from where it was named.**
+  `_SEASON_PEAK_DAY = 200` was fed to `sin`, which is at a zero crossing when its argument
+  is zero, not a maximum — so the peak landed in late October while the constant and its
+  comment both said mid-July.
+
+- **A shelf row's "vs its usual" was measured against the wrong baseline.** The band beside
+  it is a tercile of the *residual*, while the percentage compared the prediction with the
+  item's median across the whole window. On a growing item in the seasonal peak that printed
+  `Low` beside `+52% vs its usual`: both figures correct, side by side plainly nonsense.
+
+- Removed seven schema constants with no readers, describing a `ColumnTransformer`
+  pipeline, two modules and an ADR that are not in this repository.
+
 ### Changed
 
 - **A store's trading level now comes from its own attributes.** `data/synth.py` drew it

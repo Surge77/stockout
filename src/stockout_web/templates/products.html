@@ -166,11 +166,15 @@
   </p>
   <p class="note">
     The count comes from {{ regressor|replace('_', ' ') }} and the band from
-    {{ classifier|replace('_', ' ') }}. They are fitted separately and can disagree —
-    a row can sit between its own cut points while the classifier calls it quiet. Neither
-    corrects the other, and on this dataset the classifier is the weaker of the two
-    ({{ '%.0f'|format(classifier_accuracy * 100) }}% against a {{ '%.0f'|format(33.3) }}%
-    floor), so where they split the predicted count is the more defensible number.
+    {{ classifier|replace('_', ' ') }}. They are fitted separately and can disagree — a row
+    can sit between its own cut points while the classifier calls it quiet. Neither
+    corrects the other.
+    {% if classifier_accuracy and class_floor %}
+    On this dataset the band is the weaker of the two: it is right
+    {{ '%.0f'|format(classifier_accuracy * 100) }} times in 100 against
+    {{ '%.0f'|format(class_floor * 100) }} for always guessing the commonest band, so where
+    the two split, the predicted count is the more defensible number.
+    {% endif %}
   </p>
 </section>
 {% endif %}

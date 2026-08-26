@@ -52,6 +52,13 @@ class _StubCatalogue:
         return False
 
 
+class _StubBenchmarks:
+    """The shelf page reads the measured floor to say how weak the band model is."""
+
+    def class_floor(self) -> float:
+        return 0.455
+
+
 @dataclass
 class _Artifact:
     dataset: str = "synthetic_products"
@@ -87,6 +94,7 @@ class _ProductService:
 
     artifact = _Artifact()
     catalogue = _StubCatalogue()
+    benchmarks = _StubBenchmarks()
 
     def store_options(self) -> list[StoreProfile]:
         return [
@@ -233,3 +241,16 @@ def test_the_forecast_form_picks_a_shop_and_an_item(client: TestClient) -> None:
 
     assert 'name="store"' in body
     assert 'name="item"' in body
+
+
+def test_the_band_model_is_reported_against_its_measured_floor(client: TestClient) -> None:
+    """The floor is measured, not assumed.
+
+    Per-entity terciles put it near a third *in training*; on a chronological hold-out the
+    residual distribution drifts and it reached 45% on this data. A hardcoded 33% would
+    have described a barely-above-chance classifier as a decent one.
+    """
+    body = _signed_in(client).post("/products", data={"store": STORE, "date": DATE}).text
+
+    assert "for always guessing the commonest band" in body
+    assert "57 times in 100" in body
