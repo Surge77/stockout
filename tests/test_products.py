@@ -17,7 +17,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from stockout import features
+from stockout import features, ranking
 from stockout.data import schemas as s
 from stockout.data.adapters import source_for
 from stockout.datasets import prepare
@@ -189,3 +189,67 @@ def test_dates_past_the_data_are_still_answered(artifact) -> None:
 
     assert pd.notna(beyond.sales)
     assert beyond.sales != inside.sales
+
+
+# -- ranking the shelf ---------------------------------------------------------
+
+
+def test_ranking_agrees_with_scoring_each_item_on_its_own(artifact) -> None:
+    """The batch path exists for speed, so it has to be the same arithmetic.
+
+    Fifty single-row builds give the same answer and pay the frame-construction cost
+    fifty times. If the two ever diverge, the page is quietly showing something the
+    per-item view would contradict.
+    """
+    shelf = ranking.rank(artifact, store="3", date=DATE)
+
+    for item in shelf.items:
+        alone = predict(artifact, entity=item.entity, date=DATE)
+        assert item.sales == pytest.approx(alone.sales)
+        assert item.demand_class == alone.demand_class
+        assert item.thresholds == pytest.approx(alone.thresholds)
+
+
+def test_a_ranking_holds_every_item_that_store_stocks(artifact) -> None:
+    shelf = ranking.rank(artifact, store="3", date=DATE)
+
+    assert len(shelf) == len(ranking.items_in(artifact, "3"))
+    assert {item.entity.split("_")[0] for item in shelf.items} == {"3"}
+
+
+def test_a_ranking_is_sorted_busiest_first(artifact) -> None:
+    predicted = [item.sales for item in ranking.rank(artifact, store="3", date=DATE).items]
+
+    assert predicted == sorted(predicted, reverse=True)
+
+
+def test_ranked_figures_are_unit_counts_rather_than_residuals(artifact) -> None:
+    """A de-trended artefact answers in residuals; unrestored they cluster around zero."""
+    shelf = ranking.rank(artifact, store="3", date=DATE)
+
+    assert all(item.sales > 0 for item in shelf.items)
+    assert shelf.total > len(shelf)
+
+
+def test_the_shelf_total_is_what_the_rows_add_up_to(artifact) -> None:
+    shelf = ranking.rank(artifact, store="3", date=DATE)
+
+    assert shelf.total == pytest.approx(sum(i.sales for i in shelf.items))
+
+
+def test_an_unknown_store_is_refused_with_the_ones_that_exist(artifact) -> None:
+    with pytest.raises(StockoutError, match="no items recorded for store"):
+        ranking.rank(artifact, store="99", date=DATE)
+
+
+def test_a_store_day_artefact_has_no_shelf_to_rank(prepared, tmp_path) -> None:
+    """Rossmann records one row per shop-day, so the question does not apply to it."""
+    store_day, _ = train(prepare(STORE_DAY), path=tmp_path / "model.joblib")
+
+    with pytest.raises(StockoutError, match="no product axis"):
+        ranking.rank(store_day, store="1", date=DATE)
+
+
+def test_the_stores_are_listed_in_numeric_order(artifact) -> None:
+    """String order would put store 10 between 1 and 2."""
+    assert ranking.stores_in(artifact) == [str(n) for n in range(1, 11)]

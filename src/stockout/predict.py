@@ -12,7 +12,7 @@ answer confidently with nonsense.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -27,6 +27,9 @@ from .window import DateStatus
 #: A serving row has no sales yet. The column has to exist for the feature builder, and
 #: nothing reads it — every feature is built from the calendar and the store metadata.
 _SALES_PLACEHOLDER = 0.0
+
+#: How many unknown entities an error names before it stops listing them.
+_UNKNOWN_SHOWN = 3
 
 
 @dataclass
@@ -78,30 +81,48 @@ def date_status(artifact: Artifact, date: str | pd.Timestamp) -> DateStatus | No
     return window.check(date, artifact.observed_from, artifact.observed_through)
 
 
-def serving_row(
+def serving_matrix(
     artifact: Artifact,
     *,
-    entity: str,
+    entities: Sequence[str],
     date: str | pd.Timestamp,
     promo: bool = False,
     state_holiday: str = "0",
     school_holiday: bool = False,
 ) -> pd.DataFrame:
-    """Build the one-row model matrix for a store-day, exactly as training built it."""
-    entity = str(entity)
-    if artifact.entities and entity not in artifact.entities:
-        raise StockoutError(
-            f"unknown {artifact.entity_label} {entity!r}; the model was fitted on "
-            f"{len(artifact.entities):,} of them"
-        )
+    """The model matrix for many entities on one day, exactly as training built it.
+
+    One frame and one `features.build` for the whole set. The ranked-items page scores
+    every item a shop stocks against a single date, and doing that as a loop of one-row
+    builds pays the pandas overhead once per item for an identical result — the work is in
+    constructing frames, not in the arithmetic.
+
+    The row order is the order asked for, so a caller can zip its own labels against the
+    predictions without matching on the entity again.
+    """
+    names = [str(entity) for entity in entities]
+    if not names:
+        raise StockoutError("no entities to score")
+
+    known = set(artifact.entities)
+    if known:
+        unknown = [name for name in names if name not in known]
+        if unknown:
+            shown = ", ".join(repr(name) for name in unknown[:_UNKNOWN_SHOWN])
+            hidden = len(unknown) - _UNKNOWN_SHOWN
+            more = "" if hidden <= 0 else f" and {hidden} more"
+            raise StockoutError(
+                f"unknown {artifact.entity_label} {shown}{more}; the model was fitted on "
+                f"{len(artifact.entities):,} of them"
+            )
 
     status = date_status(artifact, date)
     stamp = status.stamp if status else window.parse(date)
 
-    row = pd.DataFrame(
+    rows = pd.DataFrame(
         [
             {
-                s.ENTITY: entity,
+                s.ENTITY: name,
                 s.DATE: stamp,
                 s.SALES: _SALES_PLACEHOLDER,
                 s.OPEN: 1,
@@ -109,10 +130,11 @@ def serving_row(
                 s.STATE_HOLIDAY: state_holiday,
                 s.SCHOOL_HOLIDAY: int(school_holiday),
             }
+            for name in names
         ]
     )
     built, _ = features.build(
-        row,
+        rows,
         artifact.stores,
         encoders=artifact.encoders,
         age_as_of=artifact.observed_through,
@@ -124,6 +146,26 @@ def serving_row(
     if missing:
         raise StockoutError(f"serving row is missing {', '.join(missing)}")
     return built[artifact.feature_columns]
+
+
+def serving_row(
+    artifact: Artifact,
+    *,
+    entity: str,
+    date: str | pd.Timestamp,
+    promo: bool = False,
+    state_holiday: str = "0",
+    school_holiday: bool = False,
+) -> pd.DataFrame:
+    """Build the one-row model matrix for a store-day, exactly as training built it."""
+    return serving_matrix(
+        artifact,
+        entities=[entity],
+        date=date,
+        promo=promo,
+        state_holiday=state_holiday,
+        school_holiday=school_holiday,
+    )
 
 
 def predict(

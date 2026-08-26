@@ -19,10 +19,12 @@ from .commands import (
     run_leakage,
     run_models,
     run_predict,
+    run_products,
     run_train,
 )
 from .config import DEFAULT_SPLIT, DETREND, RANDOM_SEED, TEST_SIZE
 from .data.adapters import SOURCE_NAMES
+from .data.download import DOWNLOADABLE
 from .errors import StockoutError
 from .registry import TASK_NAMES, model_names
 from .train import DEFAULT_CLASSIFIER, DEFAULT_REGRESSOR
@@ -63,6 +65,23 @@ def _add_split_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+#: Rows `products` prints unless asked for more. A shelf is long and the point of the
+#: list is what to order most of, which is at the top.
+DEFAULT_TOP = 20
+
+
+def _add_day_args(parser: argparse.ArgumentParser) -> None:
+    """What kind of day is being asked about. Shared by `predict` and `products`.
+
+    A product dataset records none of these and its models never saw them vary, so they
+    are accepted and change nothing there — the flags describe the request, and refusing
+    them would make one subcommand's surface depend on which artefact happens to be saved.
+    """
+    parser.add_argument("--promo", action="store_true", help="a promotion runs that day")
+    parser.add_argument("--state-holiday", default="0", choices=("0", "a", "b", "c"))
+    parser.add_argument("--school-holiday", action="store_true")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stockout",
@@ -74,7 +93,8 @@ def _parser() -> argparse.ArgumentParser:
     p_datasets = sub.add_parser("datasets", help="what --dataset accepts, and what is ready")
     p_datasets.set_defaults(handler=run_datasets)
 
-    p_fetch = sub.add_parser("fetch", help="download the Rossmann archive from Kaggle")
+    p_fetch = sub.add_parser("fetch", help="download a competition archive from Kaggle")
+    p_fetch.add_argument("--dataset", choices=DOWNLOADABLE, default="rossmann")
     p_fetch.add_argument("--force", action="store_true", help="re-download even if present")
     p_fetch.set_defaults(handler=run_fetch)
 
@@ -112,11 +132,23 @@ def _parser() -> argparse.ArgumentParser:
 
     p_predict = sub.add_parser("predict", help="sales and demand class for one store-day")
     p_predict.add_argument("--store", default=None, help="entity id; defaults to the first")
+    p_predict.add_argument(
+        "--item", default=None, help="item id; required on a product dataset"
+    )
     p_predict.add_argument("--date", required=True, help="YYYY-MM-DD")
-    p_predict.add_argument("--promo", action="store_true", help="a promotion runs that day")
-    p_predict.add_argument("--state-holiday", default="0", choices=("0", "a", "b", "c"))
-    p_predict.add_argument("--school-holiday", action="store_true")
+    _add_day_args(p_predict)
     p_predict.set_defaults(handler=run_predict)
+
+    p_products = sub.add_parser(
+        "products", help="every item one shop stocks on one day, busiest first"
+    )
+    p_products.add_argument("--store", default=None, help="store id; defaults to the first")
+    p_products.add_argument("--date", required=True, help="YYYY-MM-DD")
+    p_products.add_argument(
+        "--top", type=int, default=DEFAULT_TOP, help="how many rows to print"
+    )
+    _add_day_args(p_products)
+    p_products.set_defaults(handler=run_products)
 
     return parser
 

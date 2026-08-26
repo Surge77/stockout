@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import argparse
 
-from . import leakage, targets
+import pandas as pd
+
+from . import leakage, ranking, targets
 from .config import MODEL_PATH, Task
+from .data import schemas as s
 from .data.adapters import SOURCES, available
 from .datasets import describe, prepare, summary_line
+from .errors import StockoutError
 from .evaluate import baseline_accuracy, compare, split, to_markdown
 from .persistence import load as load_artifact
 from .predict import predict
@@ -22,16 +26,16 @@ from .train import DEFAULT_CLASSIFIER, DEFAULT_REGRESSOR, train
 def run_datasets(args: argparse.Namespace) -> int:
     for source in SOURCES:
         mark = "ready" if available(source) else "not downloaded"
-        print(f"  {source.name:<12} {source.description}  [{mark}]")
+        print(f"  {source.name:<19} {source.description}  [{mark}]")
         if source.raw_files:
-            print(f"  {'':<12} needs {', '.join(source.raw_files)} — {source.origin}")
+            print(f"  {'':<19} needs {', '.join(source.raw_files)} — {source.origin}")
     return 0
 
 
 def run_fetch(args: argparse.Namespace) -> int:
     from .data.download import fetch
 
-    for path in fetch(force=args.force):
+    for path in fetch(args.dataset, force=args.force):
         print(f"  {path}")
     return 0
 
@@ -98,7 +102,7 @@ def run_train(args: argparse.Namespace) -> int:
 
 def run_predict(args: argparse.Namespace) -> int:
     artifact = load_artifact(MODEL_PATH)
-    entity = args.store or (artifact.entities[0] if artifact.entities else "")
+    entity = _entity_for(artifact, store=args.store, item=args.item)
     answer = predict(
         artifact,
         entity=entity,
@@ -108,6 +112,67 @@ def run_predict(args: argparse.Namespace) -> int:
         school_holiday=args.school_holiday,
     )
     print("\n".join(answer.lines()))
+    return 0
+
+
+def _entity_for(artifact, *, store: str | None, item: str | None) -> str:
+    """The series to ask about, from whichever ids the caller supplied.
+
+    A store-day artefact takes a store and ignores `--item`; a product artefact needs both
+    and says so rather than answering about an arbitrary item. Defaulting either half
+    would return a confident number for a question nobody asked.
+    """
+    if not artifact.has_products:
+        if item is not None:
+            raise StockoutError(
+                f"{artifact.dataset} records one row per {artifact.entity_label}-day; "
+                f"there is no item axis to select"
+            )
+        return store or (artifact.entities[0] if artifact.entities else "")
+
+    if store is None or item is None:
+        raise StockoutError(
+            f"{artifact.dataset} is a product dataset; give both --store and --item "
+            f"(for example --store 3 --item 7)"
+        )
+    return f"{store}{s.PRODUCT_ENTITY_SEPARATOR}{item}"
+
+
+def run_products(args: argparse.Namespace) -> int:
+    """Every item one shop stocks on one day, busiest first.
+
+    The list, not a single series, is what a person ordering stock actually needs — and it
+    is scored in one pass rather than one request per item.
+    """
+    artifact = load_artifact(MODEL_PATH)
+    store = args.store or (ranking.stores_in(artifact)[0] if artifact.has_products else "")
+    shelf = ranking.rank(
+        artifact,
+        store=store,
+        date=args.date,
+        promo=args.promo,
+        state_holiday=args.state_holiday,
+        school_holiday=args.school_holiday,
+    )
+
+    print(f"store {shelf.store} on {shelf.date:%Y-%m-%d} | {len(shelf)} items")
+    caveat = shelf.status.caveat() if shelf.status else None
+    if caveat:
+        print(f"forecast: {caveat}")
+    print(f"predicted total {shelf.total:,.0f} {artifact.unit}")
+    print()
+
+    rows = [
+        {
+            "item": item.item,
+            "predicted": round(item.sales, 1),
+            "demand": item.demand_class,
+            "quiet below": round(item.thresholds[0], 1),
+            "busy above": round(item.thresholds[1], 1),
+        }
+        for item in shelf.busiest(args.top)
+    ]
+    print(to_markdown(pd.DataFrame(rows), places=1))
     return 0
 
 
@@ -126,6 +191,7 @@ __all__ = [
     "run_fetch",
     "run_models",
     "run_predict",
+    "run_products",
     "run_train",
 ]
 
