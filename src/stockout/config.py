@@ -15,9 +15,13 @@ DATA_DIR = _ROOT / "data"
 SAMPLE_PATH = DATA_DIR / "sample_sales.csv"
 SAMPLE_STORES_PATH = DATA_DIR / "sample_stores.csv"
 
-#: Downloaded sources land here. Never committed: Rossmann, Walmart, Store Item
-#: Demand and Superstore all forbid redistribution, which is why the synthetic
-#: sample exists at all.
+#: The committed product sample: one row per store-item-day, in the same four columns the
+#: real Store Item Demand file ships. One file rather than two because a product source
+#: has no per-entity metadata to join — see `data/synth_products.py`.
+SAMPLE_PRODUCTS_PATH = DATA_DIR / "sample_product_sales.csv"
+
+#: Downloaded sources land here. Never committed: both Rossmann and Store Item Demand
+#: forbid redistribution, which is why the two synthetic samples exist at all.
 RAW_DIR = DATA_DIR / "raw"
 
 #: Trained models land here. `persistence.load` refuses to read from anywhere else,

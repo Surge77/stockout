@@ -117,6 +117,7 @@ def serving_row(
         encoders=artifact.encoders,
         age_as_of=artifact.observed_through,
         entity_vocabulary=artifact.entity_vocabulary,
+        has_products=artifact.has_products,
     )
 
     missing = [c for c in artifact.feature_columns if c not in built.columns]

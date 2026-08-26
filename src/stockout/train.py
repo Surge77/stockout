@@ -91,6 +91,8 @@ def train(
         stores=prepared.stores,
         dataset=prepared.name,
         entity_label=prepared.source.entity_label,
+        unit=prepared.source.unit,
+        has_products=prepared.source.has_products,
         entities=prepared.entities(),
         entity_vocabulary=prepared.entity_vocabulary,
         # Scored through `scored_against`, which puts the store's line back before
@@ -119,6 +121,14 @@ def train(
 def _fit_cold_start(regression, regressor: str, seed: int):
     """Fit the regressor again without `entity_code`, and score it on a store it never saw.
 
+    Returns nothing at all for a source with no per-entity metadata. The model exists to
+    answer *how much would a shop like this take*, and "like this" is spelled out in store
+    type, assortment and competitor distance. A product source publishes none of those —
+    Kaggle never said what any item is — so the only features left would be the calendar,
+    every described shop would arrive as the same row, and the page would return one
+    confident number for every question anybody could ask it. An absent model the surface
+    can explain beats a fitted one that cannot tell two questions apart.
+
     Two different questions hide behind "predict this store's sales". *How much will
     store 12 take on Monday* may use everything known about store 12, identity included.
     *How much would a shop like this take* may not — there is no id to supply, and a model
@@ -129,6 +139,9 @@ def _fit_cold_start(regression, regressor: str, seed: int):
     this model exists to answer, and the only number that describes how well it does.
     """
     prepared = regression.prepared
+    if prepared.stores is None:
+        return None, [], {}
+
     columns = [c for c in prepared.feature_columns if c not in _COLD_EXCLUDED]
 
     model = build(regressor, task="regression", seed=seed)

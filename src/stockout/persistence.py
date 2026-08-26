@@ -55,6 +55,13 @@ class Artifact:
     stores: pd.DataFrame | None
     dataset: str
     entity_label: str
+
+    #: What `sales` counts, and whether `entity` is a store-item pair. Copied off the
+    #: source at training time because serving holds an artefact and never the `Source`
+    #: that produced it — and `has_products` decides how `features` reads an entity, so a
+    #: default that disagreed with the fit would build a different matrix at serving.
+    unit: str
+    has_products: bool
     entities: list[str]
     scores: dict[str, dict[str, float]]
     n_train: int

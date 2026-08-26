@@ -1,11 +1,21 @@
 """Where the retail data comes from, and the one shape everything downstream sees.
 
-Two sources. `synthetic` is committed, so a fresh clone runs offline. `rossmann` is the
-real competition data, which may not be redistributed and so has to be downloaded once.
+Four sources in two shapes. `synthetic` and `synthetic_products` are committed, so a fresh
+clone runs offline; `rossmann` and `store_item_demand` are the real competition data, which
+may not be redistributed and so have to be downloaded once each.
 
-Both produce the same columns — `entity, date, sales, open, promo, state_holiday,
-school_holiday` — so the registry, the comparison table and the web panel are written once
-rather than once per source. Adding another retail source means writing one loader here.
+**Store-day sources** answer *what will this shop take on this day*. One row per shop-day,
+`sales` in currency, and a metadata file describing each shop.
+
+**Product sources** answer *how many of this item will this shop shift on this day*. One
+row per shop-item-day, `sales` in units, and no metadata at all — Kaggle's Store Item
+Demand data publishes nothing about what any item is. The `entity` is the store-item pair.
+
+Every source produces the same canonical columns, so the registry, the comparison table and
+the web panel are written once rather than once per shape. What differs between the two is
+declared on `Source` rather than inferred from the dataset name downstream: a product source
+has no promotions to offer in a form and no store attributes to describe a hypothetical
+shop with, and the surfaces read those flags instead of guessing.
 """
 
 from __future__ import annotations
@@ -16,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..config import RAW_DIR, SAMPLE_PATH, SAMPLE_STORES_PATH
+from ..config import RAW_DIR, SAMPLE_PATH, SAMPLE_PRODUCTS_PATH, SAMPLE_STORES_PATH
 from ..errors import StockoutError
 from . import schemas as s
 
@@ -34,14 +44,38 @@ class Source:
     raw_files: tuple[str, ...] = field(default_factory=tuple)
     origin: str = ""
 
+    #: What `sales` counts. Currency for a till total, units for a product count. Drives
+    #: wording only — no arithmetic anywhere reads it.
+    unit: str = "currency"
 
-def _require(paths: list[Path], source: str, how: str) -> None:
+    #: Whether `entity` is a store-item pair rather than a store. When set, the adapter
+    #: also emits `store` and `item`, which `features` turns into two separate codes so a
+    #: model can learn item levels and store multipliers independently.
+    has_products: bool = False
+
+    #: Whether the source records promotions and holidays. False on the product sources,
+    #: whose rows carry none: the adapter supplies the canonical flags as constants and the
+    #: form hides the inputs rather than offering controls that cannot change an answer.
+    has_promotions: bool = True
+
+    #: Whether a per-entity metadata file exists. False on the product sources, which is
+    #: what makes the described-shop page unanswerable there — see `hypothetical.py`.
+    has_store_metadata: bool = True
+
+    @property
+    def sample_hint(self) -> str:
+        """The committed source to fall back to, named by shape rather than guessed."""
+        return "synthetic_products" if self.has_products else "synthetic"
+
+
+def _require(paths: list[Path], source: str, how: str, *, fallback: str = "synthetic") -> None:
     missing = [p for p in paths if not p.exists()]
     if missing:
         names = ", ".join(p.name for p in missing)
+        where = missing[0].parent
         raise StockoutError(
-            f"{source} needs {names} under {RAW_DIR}. {how} "
-            f"Meanwhile `--dataset synthetic` works offline and ships with the repository."
+            f"{source} needs {names} under {where}. {how} "
+            f"Meanwhile `--dataset {fallback}` works offline and ships with the repository."
         )
 
 
@@ -93,6 +127,59 @@ def _load_rossmann() -> tuple[pd.DataFrame, pd.DataFrame | None]:
     return _finalise(sales), stores
 
 
+#: Store Item Demand unpacks its own `train.csv`, and so does Rossmann. Both landing in
+#: `data/raw/` would have the second download silently overwrite the first, so the product
+#: competition gets a subdirectory. Rossmann keeps the flat layout it already has on disk:
+#: moving it would break every clone that has already fetched it, to tidy a path.
+PRODUCT_RAW_DIR = RAW_DIR / "store-item-demand"
+
+
+def _as_product_panel(sales: pd.DataFrame) -> pd.DataFrame:
+    """Give a store-item frame the canonical columns, and say what it does not have.
+
+    The four flags are constants here because the source genuinely carries none of them:
+    every day is a trading day, and no promotion or holiday is recorded against any row.
+    Supplying them as zeros keeps one canonical shape for every source; `Source` declares
+    the absence so no surface mistakes a constant column for a real one.
+    """
+    frame = sales.copy()
+    frame[s.ENTITY] = (
+        frame[s.STORE].astype("string")
+        + s.PRODUCT_ENTITY_SEPARATOR
+        + frame[s.ITEM].astype("string")
+    )
+    frame[s.OPEN] = 1
+    frame[s.PROMO] = 0
+    frame[s.STATE_HOLIDAY] = "0"
+    frame[s.SCHOOL_HOLIDAY] = 0
+    return frame
+
+
+def _load_synthetic_products() -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    _require(
+        [SAMPLE_PRODUCTS_PATH],
+        "synthetic_products",
+        "Regenerate it with `python scripts/make_product_sample.py`.",
+        fallback="synthetic_products",
+    )
+    sales = pd.read_csv(SAMPLE_PRODUCTS_PATH)
+    return _finalise(_as_product_panel(sales)), None
+
+
+def _load_store_item_demand() -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    train = PRODUCT_RAW_DIR / "train.csv"
+    _require(
+        [train],
+        "store_item_demand",
+        "Run `python -m stockout fetch --dataset store_item_demand` once, with a "
+        "kaggle.json and the competition rules accepted at "
+        "kaggle.com/competitions/demand-forecasting-kernels-only/rules.",
+        fallback="synthetic_products",
+    )
+    sales = pd.read_csv(train).rename(columns=s.STORE_ITEM_RENAME)
+    return _finalise(_as_product_panel(sales)), None
+
+
 SOURCES: tuple[Source, ...] = (
     Source(
         name="synthetic",
@@ -102,10 +189,33 @@ SOURCES: tuple[Source, ...] = (
     ),
     Source(
         name="rossmann",
-        description="Rossmann store sales: 1,115 German drugstores over 942 days.",
+        description="Rossmann store sales: 1,115 German health-and-beauty shops over 942 days.",
         load=_load_rossmann,
         raw_files=("train.csv", "store.csv"),
         origin="kaggle competitions rossmann-store-sales",
+    ),
+    Source(
+        name="synthetic_products",
+        description="Store-item unit demand, generated and committed.",
+        load=_load_synthetic_products,
+        entity_label="store-item",
+        origin="scripts/make_product_sample.py",
+        unit="units",
+        has_products=True,
+        has_promotions=False,
+        has_store_metadata=False,
+    ),
+    Source(
+        name="store_item_demand",
+        description="Store Item Demand: 10 shops x 50 items of daily unit sales over five years.",
+        load=_load_store_item_demand,
+        entity_label="store-item",
+        raw_files=("train.csv",),
+        origin="kaggle competitions demand-forecasting-kernels-only",
+        unit="units",
+        has_products=True,
+        has_promotions=False,
+        has_store_metadata=False,
     ),
 )
 

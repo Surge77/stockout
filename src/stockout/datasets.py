@@ -79,10 +79,19 @@ def prepare(name: str, *, drop_closed: bool = True) -> Prepared:
         raise StockoutError(f"{name} has no open days to model")
 
     vocabulary = _vocabulary_for(sales[s.ENTITY])
-    frame, encoders = features.build(sales, stores, entity_vocabulary=vocabulary)
+    frame, encoders = features.build(
+        sales,
+        stores,
+        entity_vocabulary=vocabulary,
+        has_products=source.has_products,
+    )
     return Prepared(
         frame=frame,
-        feature_columns=features.feature_columns(frame),
+        feature_columns=features.feature_columns(
+            frame,
+            has_promotions=source.has_promotions,
+            has_store_metadata=source.has_store_metadata,
+        ),
         encoders=encoders,
         source=source,
         stores=stores,

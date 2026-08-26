@@ -106,6 +106,16 @@ def predict_described(
     limitation and the page says so rather than implying the class is per-store.
     """
     if artifact.cold_regressor is None:
+        # Two different absences, and telling a visitor to retrain would be wrong advice
+        # for one of them: a product source will never produce this model, however many
+        # times it is fitted.
+        if artifact.has_products:
+            raise StockoutError(
+                f"{artifact.dataset} describes no attributes of an item — the source "
+                f"publishes ids and units and nothing else — so a described product "
+                f"cannot be told apart from the average one. Ask about a "
+                f"{artifact.entity_label} that exists instead."
+            )
         raise StockoutError(
             "this artefact has no cold-start model; retrain it with the current build"
         )

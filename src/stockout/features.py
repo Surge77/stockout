@@ -11,10 +11,11 @@ this store on this kind of day*, not *forecast the next six weeks*. Two adjacent
 one store are near-duplicates, so a shuffled split still flatters the score a little.
 Much smaller than a lag leak, not zero.
 
-Categoricals go through `LabelEncoder` with a **fixed** vocabulary rather than one learned
-from the fold, so a store type the training rows never contained cannot raise inside a web
-request. Label encoding implies an ordering that does not exist; trees cope with that and
-the linear models less so.
+The matrix is assembled from three families, each in its own module where it is big enough
+to warrant one: the calendar and the product axes below, the store metadata in
+`store_features.py`, and every id-to-integer mapping in `encoding.py`. `build` is the only
+way in, so the training path and the serving path cannot drift — the web panel scores a
+single row through exactly the code that built the rows the model was fitted on.
 """
 
 from __future__ import annotations
@@ -24,26 +25,37 @@ import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
 from .data import schemas as s
-
-#: Month tokens as Rossmann spells them in `promo_interval`. "Sept" rather than "Sep"
-#: is the source's spelling, not a typo.
-MONTH_TOKENS: tuple[str, ...] = (
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sept", "Oct", "Nov", "Dec",
+from .encoding import (
+    LABEL_VOCABULARIES,
+    UNKNOWN,
+    UNKNOWN_ENTITY_CODE,
+    as_code,
+    encode_labels,
+    entity_codes,
 )
+from .store_features import MONTH_TOKENS, STORE_FEATURES, add_store_features
 
-#: Anything outside a column's known vocabulary becomes this. Present in every
-#: vocabulary below, so `LabelEncoder.transform` always has a code for it.
-UNKNOWN = "unknown"
-
-#: Fixed up front rather than learned. These are closed sets: Rossmann has four store
-#: types, three assortments and four holiday codes, and all of them are known before any
-#: data is read.
-LABEL_VOCABULARIES: dict[str, tuple[str, ...]] = {
-    s.STORE_TYPE: ("a", "b", "c", "d", UNKNOWN),
-    s.ASSORTMENT: ("a", "b", "c", UNKNOWN),
-    s.STATE_HOLIDAY: ("0", "a", "b", "c", UNKNOWN),
-}
+#: Re-exported so callers keep importing feature vocabulary from one place. The split
+#: below is about file size, not about asking every caller to learn a new import path.
+__all__ = [
+    "CALENDAR_FEATURES",
+    "ENTITY_CODE",
+    "LABEL_VOCABULARIES",
+    "MONTH_TOKENS",
+    "PRODUCT_FEATURES",
+    "ROW_FEATURES",
+    "STORE_FEATURES",
+    "UNKNOWN",
+    "UNKNOWN_ENTITY_CODE",
+    "add_calendar_features",
+    "add_product_features",
+    "add_store_features",
+    "build",
+    "drop_closed",
+    "encode_labels",
+    "feature_columns",
+    "is_constant",
+]
 
 CALENDAR_FEATURES: tuple[str, ...] = (
     "day_of_week",
@@ -53,17 +65,28 @@ CALENDAR_FEATURES: tuple[str, ...] = (
     "is_weekend",
 )
 
-STORE_FEATURES: tuple[str, ...] = (
-    s.STORE_TYPE,
-    s.ASSORTMENT,
-    s.COMPETITION_DISTANCE,
-    "competition_open_age_months",
-    s.PROMO2,
-    "promo2_age_weeks",
-    "is_promo2_month",
-)
-
 ROW_FEATURES: tuple[str, ...] = (s.PROMO, s.STATE_HOLIDAY, s.SCHOOL_HOLIDAY)
+
+#: The two axes of a store-item entity, as separate features. Built only for sources that
+#: have a product axis, so a store-day model's matrix is unchanged by their existence.
+#:
+#: Separate, and that is the whole design. `entity_code` identifies the series — store 3's
+#: item 25 — and a model given only that has to learn every one of the 200 levels on its
+#: own rows. Given the two axes it can learn twenty item levels from ten stores' worth of
+#: rows each and ten store multipliers from twenty items' worth, then compose them. Fewer
+#: quantities, each estimated from more data.
+#:
+#: Measured on `synthetic_products`: the pair is worth about +0.017 r² on an ordinary
+#: held-out split, where every series has hundreds of its own rows and identity alone is
+#: nearly enough. What they really buy shows up on a store-item pair held out entirely —
+#: mean r² -18.4 from identity alone against -0.18 from the two axes, because a code the
+#: fit never saw lands in an arbitrary leaf while a store and an item it has both seen
+#: thousands of times still compose.
+#:
+#: `entity_code` is kept alongside them rather than replaced. The pair are additive by
+#: construction; anything specific to one store's copy of one item — a local favourite —
+#: lives in the identity and nowhere else.
+PRODUCT_FEATURES: tuple[str, ...] = ("store_code", "item_code")
 
 #: The entity's integer id. Never one-hot: real Rossmann has 1,115 stores, which would be
 #: 1,115 columns nobody can defend and a distance metric where every pair of stores is
@@ -71,8 +94,6 @@ ROW_FEATURES: tuple[str, ...] = (s.PROMO, s.STATE_HOLIDAY, s.SCHOOL_HOLIDAY)
 ENTITY_CODE = "entity_code"
 
 _SATURDAY = 5
-_MONTHS_PER_YEAR = 12
-_DAYS_PER_WEEK = 7
 
 
 def add_calendar_features(frame: pd.DataFrame) -> pd.DataFrame:
@@ -87,145 +108,69 @@ def add_calendar_features(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def add_store_features(
-    frame: pd.DataFrame,
-    stores: pd.DataFrame | None,
-    *,
-    age_as_of: pd.Timestamp | None = None,
-) -> pd.DataFrame:
-    """Join per-entity metadata and turn its three date columns into ages.
+def add_product_features(frame: pd.DataFrame, *, has_products: bool) -> pd.DataFrame:
+    """Split a store-item entity into its two axes, from whichever shape is to hand.
 
-    `store.csv` is one row per store, so joining it alone gives every day of a store's
-    history the same constant. The useful features are how far *this row's date* is from
-    the competitor opening and from the promotion start, which vary down the frame.
+    Training frames arrive from the adapter with `store` and `item` still on them, so the
+    columns are read directly. A serving request carries an entity and nothing else — the
+    web form knows it picked store 3 and item 25, but `serving_row` builds the same
+    canonical row every source uses — so the pair is recovered by splitting the id.
 
-    `age_as_of` caps the date the **ages** are measured from, and exists for serving a
-    date beyond the training window. The two kinds of date feature behave differently out
-    there and the difference decides what is safe:
+    Both routes must agree, because one fits the model and the other queries it. Reading
+    the columns where they exist and splitting where they do not is what keeps them
+    agreeing without the serving path having to reconstruct an adapter's output.
 
-    The calendar features are cyclic. `day_of_week`, `month`, `week_of_year` for a day in
-    2030 take values the fit has already seen thousands of times, so they extrapolate for
-    free and must use the real date — capping them would answer about the wrong weekday.
-
-    The ages are monotone. `competition_open_age_months` grows without bound, so a date
-    years past the window supplies a value beyond every split point the trees were built
-    from, and beyond the range any linear coefficient was fitted over. Left alone it is
-    silent extrapolation on a feature carrying about a sixth of the deployed model's
-    importance. Capped at the last fitted day it is the honest reading: *as far as this
-    model can tell, this store's competitor has been open the longest it ever observed.*
-
-    `is_promo2_month` is cyclic like the calendar, so it keeps the real date too.
+    `has_products` is passed rather than sniffed. Deciding by "does the entity contain a
+    separator" would make a store-day source's behaviour depend on how its ids happen to
+    be spelled, which is exactly the kind of implicit contract that breaks quietly when a
+    new source arrives.
     """
-    frame = frame.copy()
-    if stores is None:
-        for column in STORE_FEATURES:
-            frame[column] = _absent_value(column)
+    if not has_products:
         return frame
 
-    metadata = stores.copy()
-    metadata[s.ENTITY] = metadata[s.ENTITY].astype("string")
-    frame = frame.merge(metadata, on=s.ENTITY, how="left", suffixes=("", "_store"))
+    frame = frame.copy()
+    if s.STORE in frame.columns and s.ITEM in frame.columns:
+        store, item = frame[s.STORE], frame[s.ITEM]
+    else:
+        halves = frame[s.ENTITY].astype("string").str.split(
+            s.PRODUCT_ENTITY_SEPARATOR, n=1, expand=True
+        )
+        store, item = halves[0], halves[1]
 
-    dates = pd.to_datetime(frame[s.DATE])
-    aged = dates if age_as_of is None else _capped(dates, pd.Timestamp(age_as_of))
-    frame["competition_open_age_months"] = _age_in_months(
-        aged, frame.get(s.COMPETITION_OPEN_YEAR), frame.get(s.COMPETITION_OPEN_MONTH)
-    )
-    frame["promo2_age_weeks"] = _age_in_weeks(
-        aged, frame.get(s.PROMO2_SINCE_YEAR), frame.get(s.PROMO2_SINCE_WEEK)
-    )
-    frame["is_promo2_month"] = _is_promo2_month(dates, frame.get(s.PROMO_INTERVAL))
-
-    for column in STORE_FEATURES:
-        if column not in frame.columns:
-            frame[column] = _absent_value(column)
+    frame["store_code"] = as_code(store)
+    frame["item_code"] = as_code(item)
     return frame
 
 
-def _absent_value(column: str) -> str | int:
-    return UNKNOWN if column in LABEL_VOCABULARIES else 0
+def feature_columns(
+    frame: pd.DataFrame,
+    *,
+    has_promotions: bool = True,
+    has_store_metadata: bool = True,
+) -> list[str]:
+    """The model matrix's columns, in a stable order.
 
+    A whitelist, which is what keeps both targets out of the matrix: `sales` and
+    `demand_class` are excluded by not appearing here, rather than by a blocklist that has
+    to be kept in step with every column any adapter might add.
 
-def _capped(dates: pd.Series, ceiling: pd.Timestamp) -> pd.Series:
-    """`dates` with anything after `ceiling` pulled back to it.
+    The two flags drop whole families the **source declares it does not carry**. A product
+    source records no promotion and no store attributes, so the adapter supplies those
+    canonical columns as constants to keep one shape across every source — and a constant
+    column is not a feature. Ten of a product matrix's eighteen columns were filler that
+    no model can split on, cluttering `describe`, the importances and this list.
 
-    `Series.clip(upper=...)` does this too, but its stubs do not admit a `Timestamp`, and
-    silencing that would hide a real class of mistake at every other call site.
+    Declared absence, deliberately, rather than measured constancy. `synthetic` happens to
+    hold one value in `state_holiday` too, and dropping columns because *this sample* never
+    varied would silently change the matrix a published score was measured on.
     """
-    return dates.mask(dates > ceiling, ceiling)
-
-
-def _age_in_months(
-    dates: pd.Series, year: pd.Series | None, month: pd.Series | None
-) -> pd.Series:
-    """Months since the competitor opened. Negative before it did, 0 where unknown."""
-    if year is None or month is None:
-        return pd.Series(0.0, index=dates.index)
-    months = (dates.dt.year - year) * _MONTHS_PER_YEAR + (dates.dt.month - month)
-    return months.fillna(0).astype("float64")
-
-
-def _age_in_weeks(
-    dates: pd.Series, year: pd.Series | None, week: pd.Series | None
-) -> pd.Series:
-    """Weeks since the continuing promotion started, 0 where the store runs none."""
-    if year is None or week is None:
-        return pd.Series(0.0, index=dates.index)
-    weeks = (dates.dt.year - year) * (365.25 / _DAYS_PER_WEEK) + (
-        dates.dt.isocalendar().week - week
-    )
-    return weeks.fillna(0).astype("float64")
-
-
-def _is_promo2_month(dates: pd.Series, interval: pd.Series | None) -> pd.Series:
-    """Whether this row's month is one the store's continuing promotion repeats in.
-
-    This is the feature `promo_interval` actually buys. On its own that column is three
-    distinct values in the whole dataset and constant per store; crossed with the row's
-    calendar it varies down the frame and says something a model can use.
-    """
-    if interval is None:
-        return pd.Series(0, index=dates.index, dtype="int8")
-    months = dates.dt.month.fillna(0).astype("int64").to_numpy()
-    tokens = [
-        MONTH_TOKENS[month - 1] if 1 <= month <= _MONTHS_PER_YEAR else ""
-        for month in months
+    wanted = [
+        ENTITY_CODE,
+        *PRODUCT_FEATURES,
+        *CALENDAR_FEATURES,
+        *(ROW_FEATURES if has_promotions else ()),
+        *(STORE_FEATURES if has_store_metadata else ()),
     ]
-    text = interval.astype("string").fillna("")
-    flags = [
-        1 if token and token in row else 0
-        for token, row in zip(tokens, text, strict=True)
-    ]
-    return pd.Series(flags, index=dates.index, dtype="int8")
-
-
-def encode_labels(
-    frame: pd.DataFrame, *, encoders: dict[str, LabelEncoder] | None = None
-) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
-    """Label-encode every categorical against its fixed vocabulary.
-
-    Returns the encoders so the artefact can carry them: serving must use exactly the
-    mapping training used, and refitting at predict time would silently renumber.
-    """
-    frame = frame.copy()
-    encoders = encoders or {}
-    for column, vocabulary in LABEL_VOCABULARIES.items():
-        if column not in frame.columns:
-            continue
-        if column not in encoders:
-            encoder = LabelEncoder()
-            encoder.fit(list(vocabulary))
-            encoders[column] = encoder
-        known = set(vocabulary)
-        values = frame[column].astype("string").fillna(UNKNOWN)
-        values = values.where(values.isin(known), UNKNOWN)
-        frame[column] = encoders[column].transform(values.to_numpy()).astype("int16")
-    return frame, encoders
-
-
-def feature_columns(frame: pd.DataFrame) -> list[str]:
-    """The model matrix's columns, in a stable order."""
-    wanted = [ENTITY_CODE, *CALENDAR_FEATURES, *ROW_FEATURES, *STORE_FEATURES]
     return [column for column in wanted if column in frame.columns]
 
 
@@ -236,62 +181,30 @@ def build(
     encoders: dict[str, LabelEncoder] | None = None,
     age_as_of: pd.Timestamp | None = None,
     entity_vocabulary: list[str] | None = None,
+    has_products: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, LabelEncoder]]:
     """Sales rows plus optional metadata in, model-ready frame out.
 
-    `age_as_of` is a serving concern only — see `add_store_features`. Training leaves it
-    unset, so the frame the models are fitted on is unchanged by its existence.
+    `age_as_of` is a serving concern only — see `store_features.add_store_features`.
+    Training leaves it unset, so the frame the models are fitted on is unchanged by its existence.
 
-    `entity_vocabulary` is the other serving concern — see `_entity_codes`. Training
+    `entity_vocabulary` is the other serving concern — see `encoding.entity_codes`. Training
     derives it from the frame and the artefact carries it, because a one-row request
     cannot recover the ordering a million-row fit produced.
+
+    `has_products` says whether `entity` is a store-item pair, and comes from the source
+    rather than from the shape of the ids — see `add_product_features`.
     """
     frame = add_calendar_features(sales)
     frame = add_store_features(frame, stores, age_as_of=age_as_of)
-    frame[ENTITY_CODE] = _entity_codes(frame[s.ENTITY], entity_vocabulary)
+    frame = add_product_features(frame, has_products=has_products)
+    frame[ENTITY_CODE] = entity_codes(frame[s.ENTITY], entity_vocabulary)
     frame, encoders = encode_labels(frame, encoders=encoders)
 
     for column in feature_columns(frame):
         if column not in LABEL_VOCABULARIES:
             frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     return frame, encoders
-
-
-#: The code for an entity the vocabulary does not contain. Never produced in training, so
-#: it lands outside every split point the trees were built from rather than impersonating
-#: a real series. `predict.serving_row` refuses unknown entities before they reach here;
-#: this is what shows up if that guard is ever bypassed.
-UNKNOWN_ENTITY_CODE = -1
-
-
-def _entity_codes(entities: pd.Series, vocabulary: list[str] | None = None) -> pd.Series:
-    """Stable integer per entity, by whichever route the ids allow.
-
-    **A carried vocabulary wins.** Position in a fixed list is the same number whether the
-    frame holds one row or a million, which is the property serving needs and the only one
-    that survives a single-row request.
-
-    **Numeric ids are their own code.** Rossmann's entities are store numbers, so the id
-    *is* a stable integer and no vocabulary is needed. Kept as the fast path deliberately:
-    routing Rossmann through a vocabulary would renumber every store and move scores that
-    are published.
-
-    **Anything else falls back to `factorize`**, which is correct only when the frame is
-    the whole training frame. A store-item entity such as `"3_26"` is not numeric, so
-    before the vocabulary existed a one-row serving frame factorized it to 0 and the model
-    answered about whichever series happened to sort first.
-    """
-    if vocabulary is not None:
-        lookup = {name: index for index, name in enumerate(vocabulary)}
-        codes = entities.astype("string").map(lookup)
-        return codes.fillna(UNKNOWN_ENTITY_CODE).astype("int32")
-
-    numeric = pd.to_numeric(entities, errors="coerce")
-    if not numeric.isna().any():
-        return numeric.astype("int32")
-    return pd.Series(
-        pd.factorize(entities.astype("string"), sort=True)[0], index=entities.index
-    ).astype("int32")
 
 
 def drop_closed(frame: pd.DataFrame) -> pd.DataFrame:

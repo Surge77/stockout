@@ -11,6 +11,17 @@ from typing import Final
 
 DATE: Final = "date"
 STORE: Final = "store"
+
+#: What joins a store id and an item id into one `entity`, and splits them back apart at
+#: serving time. A contract between `adapters._as_product_panel`, which builds the string,
+#: and `features.add_product_features`, which reverses it from a request that carries an
+#: entity and nothing else. Store ids and item ids are integers on every product source, so
+#: the separator cannot occur inside either half.
+PRODUCT_ENTITY_SEPARATOR: Final = "_"
+
+#: The product axis, on sources that have one. Absent from every store-day source, which
+#: is why `features.PRODUCT_FEATURES` is built conditionally rather than always.
+ITEM: Final = "item"
 SALES: Final = "sales"
 #: Recorded in the training data and unknowable at the forecast origin: it is the single
 #: best predictor of `sales` and nobody knows it six weeks ahead. Never a feature, which
@@ -62,6 +73,11 @@ CANONICAL_COLUMNS: Final[tuple[str, ...]] = (
 #: The keys that identify one observation. Duplicates here are a data bug, not a tie.
 KEY_COLUMNS: Final[tuple[str, ...]] = (STORE, DATE)
 
+#: What identifies one observation on a source with a product axis. A store-day source
+#: uses `KEY_COLUMNS`; on a product source the same pair would report every item of a
+#: store-day as a duplicate of the others.
+PRODUCT_KEY_COLUMNS: Final[tuple[str, ...]] = (STORE, ITEM, DATE)
+
 #: What must be present before anything downstream will run.
 REQUIRED_COLUMNS: Final[tuple[str, ...]] = (
     DATE,
@@ -100,6 +116,15 @@ ROSSMANN_RENAME: Final[dict[str, str]] = {
     "StateHoliday": STATE_HOLIDAY,
     "SchoolHoliday": SCHOOL_HOLIDAY,
     "DayOfWeek": DAY_OF_WEEK,
+}
+
+#: Kaggle's Store Item Demand data ships four lower-case columns, three of which already
+#: match. `item` is the one this package had no name for until now.
+STORE_ITEM_RENAME: Final[dict[str, str]] = {
+    "date": DATE,
+    "store": STORE,
+    "item": ITEM,
+    "sales": SALES,
 }
 
 ROSSMANN_STORE_RENAME: Final[dict[str, str]] = {
