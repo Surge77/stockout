@@ -91,6 +91,7 @@ def prepare(name: str, *, drop_closed: bool = True) -> Prepared:
             frame,
             has_promotions=source.has_promotions,
             has_store_metadata=source.has_store_metadata,
+            has_item_metadata=source.has_item_metadata,
         ),
         encoders=encoders,
         source=source,

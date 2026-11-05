@@ -26,7 +26,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..config import RAW_DIR, SAMPLE_PATH, SAMPLE_PRODUCTS_PATH, SAMPLE_STORES_PATH
+from ..config import (
+    RAW_DIR,
+    SAMPLE_CATALOGUE_PATH,
+    SAMPLE_PATH,
+    SAMPLE_PRODUCTS_PATH,
+    SAMPLE_STORES_PATH,
+)
 from ..errors import StockoutError
 from . import schemas as s
 
@@ -61,6 +67,12 @@ class Source:
     #: Whether a per-entity metadata file exists. False on the product sources, which is
     #: what makes the described-shop page unanswerable there — see `hypothetical.py`.
     has_store_metadata: bool = True
+
+    #: Whether the source says what its items *are*. True only for `synthetic_products`,
+    #: which this repository generates and can therefore give a catalogue; the real Store
+    #: Item Demand file publishes an integer per item and nothing else, so an item there is
+    #: its number and its history and there is no honest name to print beside it.
+    has_item_metadata: bool = False
 
     @property
     def sample_hint(self) -> str:
@@ -155,15 +167,29 @@ def _as_product_panel(sales: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _catalogue_per_entity(sales: pd.DataFrame, catalogue: pd.DataFrame) -> pd.DataFrame:
+    """The item catalogue, restated one row per store-item pair.
+
+    Metadata is joined on `entity` everywhere in this package, and the catalogue is per
+    *item* — the same description belongs to store 3's copy and store 8's. Expanding it
+    here keeps one join in `features` rather than a second keyed on a different column.
+    """
+    entities = sales[[s.ENTITY, s.ITEM]].drop_duplicates()
+    joined = entities.merge(catalogue, on=s.ITEM, how="left")
+    joined[s.ENTITY] = joined[s.ENTITY].astype("string")
+    return joined
+
+
 def _load_synthetic_products() -> tuple[pd.DataFrame, pd.DataFrame | None]:
     _require(
-        [SAMPLE_PRODUCTS_PATH],
+        [SAMPLE_PRODUCTS_PATH, SAMPLE_CATALOGUE_PATH],
         "synthetic_products",
-        "Regenerate it with `python scripts/make_product_sample.py`.",
+        "Regenerate them with `python scripts/make_product_sample.py`.",
         fallback="synthetic_products",
     )
-    sales = pd.read_csv(SAMPLE_PRODUCTS_PATH)
-    return _finalise(_as_product_panel(sales)), None
+    sales = _finalise(_as_product_panel(pd.read_csv(SAMPLE_PRODUCTS_PATH)))
+    catalogue = pd.read_csv(SAMPLE_CATALOGUE_PATH)
+    return sales, _catalogue_per_entity(sales, catalogue)
 
 
 def _load_store_item_demand() -> tuple[pd.DataFrame, pd.DataFrame | None]:
@@ -204,6 +230,7 @@ SOURCES: tuple[Source, ...] = (
         has_products=True,
         has_promotions=False,
         has_store_metadata=False,
+        has_item_metadata=True,
     ),
     Source(
         name="store_item_demand",
