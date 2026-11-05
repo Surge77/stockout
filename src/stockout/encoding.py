@@ -16,6 +16,7 @@ import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
 from .data import schemas as s
+from .data.synth_products import PRODUCT_CATEGORIES
 
 #: Anything outside a column's known vocabulary becomes this. Present in every
 #: vocabulary below, so `LabelEncoder.transform` always has a code for it.
@@ -28,6 +29,10 @@ LABEL_VOCABULARIES: dict[str, tuple[str, ...]] = {
     s.STORE_TYPE: ("a", "b", "c", "d", UNKNOWN),
     s.ASSORTMENT: ("a", "b", "c", UNKNOWN),
     s.STATE_HOLIDAY: ("0", "a", "b", "c", UNKNOWN),
+    # What kind of thing an item is, on the source that says. Fixed here like the rest:
+    # a category absent from one fold must still encode to the same integer, and a
+    # source that publishes no catalogue at all folds every row to `unknown`.
+    s.CATEGORY: (*PRODUCT_CATEGORIES, UNKNOWN),
 }
 
 #: The code for an entity the vocabulary does not contain. Never produced in training, so

@@ -40,6 +40,7 @@ from .store_features import MONTH_TOKENS, STORE_FEATURES, add_store_features
 __all__ = [
     "CALENDAR_FEATURES",
     "ENTITY_CODE",
+    "ITEM_FEATURES",
     "LABEL_VOCABULARIES",
     "MONTH_TOKENS",
     "PRODUCT_FEATURES",
@@ -92,6 +93,16 @@ ROW_FEATURES: tuple[str, ...] = (s.PROMO, s.STATE_HOLIDAY, s.SCHOOL_HOLIDAY)
 #: construction; anything specific to one store's copy of one item — a local favourite —
 #: lives in the identity and nowhere else.
 PRODUCT_FEATURES: tuple[str, ...] = ("store_code", "item_code")
+
+#: What an item *is*, where the source says so. Separate from `PRODUCT_FEATURES` because
+#: the two answer different questions: those are identity, this is description.
+#:
+#: The distinction is what makes a described item answerable at all. `item_code` cannot
+#: help with a product the fit has never seen — there is no id to supply — whereas a
+#: category it has seen thousands of rows of still carries a level. That is the same split
+#: `store_type`/`assortment` make for shops, and the reason the described-item page exists
+#: on a source with a catalogue and refuses on one without.
+ITEM_FEATURES: tuple[str, ...] = (s.CATEGORY,)
 
 #: The entity's integer id. Never one-hot: real Rossmann has 1,115 stores, which would be
 #: 1,115 columns nobody can defend and a distance metric where every pair of stores is
@@ -152,6 +163,7 @@ def feature_columns(
     *,
     has_promotions: bool = True,
     has_store_metadata: bool = True,
+    has_item_metadata: bool = False,
 ) -> list[str]:
     """The model matrix's columns, in a stable order.
 
@@ -172,6 +184,7 @@ def feature_columns(
     wanted = [
         ENTITY_CODE,
         *PRODUCT_FEATURES,
+        *(ITEM_FEATURES if has_item_metadata else ()),
         *CALENDAR_FEATURES,
         *(ROW_FEATURES if has_promotions else ()),
         *(STORE_FEATURES if has_store_metadata else ()),
