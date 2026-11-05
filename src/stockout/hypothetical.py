@@ -45,6 +45,10 @@ _UNKNOWN_HISTORY: dict[str, object] = {
     s.PROMO_INTERVAL: "",
 }
 
+#: What a described item's category is measured against in `contributions`. The commonest
+#: kind of thing on the shelf, so the figure reads as "against a household staple".
+_BASELINE_CATEGORY = "household"
+
 #: The id given to the described store. Never reaches the model — `cold_feature_columns`
 #: excludes `entity_code` — but `features.build` needs the column present.
 _PLACEHOLDER_ENTITY = "hypothetical"
@@ -73,6 +77,30 @@ class StoreDescription:
         }
 
 
+@dataclass(frozen=True)
+class ProductDescription:
+    """What somebody types in to describe an item that is not stocked yet.
+
+    One field, because one is all the source publishes. A catalogue says what kind of
+    thing an item is and nothing else — no price, no pack size, no brand — so a described
+    item is its category, and the answer is what that category does in an average shop.
+
+    Narrower than `StoreDescription` on purpose. Adding fields the data does not carry
+    would let the form collect input the model cannot read, which is the failure the
+    described-shop page already warns about for Rossmann's shop groups.
+    """
+
+    category: str
+
+    def as_row(self) -> dict[str, object]:
+        return {s.CATEGORY: self.category}
+
+
+#: Either shape of described entity. Both are read the same way — `as_row` is the whole
+#: interface `_serving_row` needs — so the two paths differ only in what a form collects.
+Description = StoreDescription | ProductDescription
+
+
 @dataclass
 class HypotheticalPrediction:
     """Predicted sales for a described store, and how much to trust it."""
@@ -81,7 +109,7 @@ class HypotheticalPrediction:
     demand_class: str
     thresholds: tuple[float, float]
     unseen_store_r2: float
-    description: StoreDescription
+    description: Description
     date: pd.Timestamp
     per_model: dict[str, float] = field(default_factory=dict)
 
@@ -92,7 +120,7 @@ class HypotheticalPrediction:
 
 def predict_described(
     artifact: Artifact,
-    description: StoreDescription,
+    description: Description,
     *,
     date: str | pd.Timestamp,
     promo: bool = False,
@@ -148,7 +176,7 @@ def predict_described(
 
 def contributions(
     artifact: Artifact,
-    description: StoreDescription,
+    description: Description,
     *,
     date: str | pd.Timestamp,
     promo: bool = False,
@@ -168,17 +196,22 @@ def contributions(
         state_holiday=state_holiday, school_holiday=school_holiday,
     ).sales
 
-    def swap(**changes: object) -> StoreDescription:
+    def swap(**changes: object) -> Description:
         return replace(description, **changes)  # type: ignore[arg-type]
 
-    # Each baseline is the plainest version of that one attribute: the basic range, the
-    # middle store type, no recorded competitor, no continuing promotion.
-    baselines = {
-        "Assortment": swap(assortment="a"),
-        "Store type": swap(store_type="c"),
-        "Competitor distance": swap(competition_distance=None),
-        "Promo2": swap(promo2=False),
-    }
+    # Each baseline is the plainest version of that one attribute. A described *item* has
+    # only its category, and there is no plainer category — every one is a real kind of
+    # thing — so the baseline is the commonest, and the figure reads "what this category
+    # is worth against the shelf's biggest".
+    if isinstance(description, ProductDescription):
+        baselines: dict[str, Description] = {"Category": swap(category=_BASELINE_CATEGORY)}
+    else:
+        baselines = {
+            "Assortment": swap(assortment="a"),
+            "Store type": swap(store_type="c"),
+            "Competitor distance": swap(competition_distance=None),
+            "Promo2": swap(promo2=False),
+        }
 
     out: list[tuple[str, float]] = []
     for label, alternative in baselines.items():
@@ -188,18 +221,19 @@ def contributions(
         ).sales
         out.append((label, actual - counterfactual))
 
-    without_promo = predict_described(
-        artifact, description, date=date, promo=False,
-        state_holiday=state_holiday, school_holiday=school_holiday,
-    ).sales
-    out.append(("Promotion", actual - without_promo))
+    if not artifact.has_products:
+        without_promo = predict_described(
+            artifact, description, date=date, promo=False,
+            state_holiday=state_holiday, school_holiday=school_holiday,
+        ).sales
+        out.append(("Promotion", actual - without_promo))
 
     return sorted(out, key=lambda pair: abs(pair[1]), reverse=True)
 
 
 def _serving_row(
     artifact: Artifact,
-    description: StoreDescription,
+    description: Description,
     *,
     date: str | pd.Timestamp,
     promo: bool,
