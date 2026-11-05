@@ -125,6 +125,10 @@ class _StubService:
     def unit(self) -> str:
         return "currency"
 
+    def categories(self) -> list[str]:
+        """A store-day deployment has no catalogue, so the described-shop form is used."""
+        return []
+
     def has_products(self) -> bool:
         return False
 

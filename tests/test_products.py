@@ -22,7 +22,7 @@ from stockout.data import schemas as s
 from stockout.data.adapters import source_for
 from stockout.datasets import prepare
 from stockout.errors import StockoutError
-from stockout.hypothetical import StoreDescription, predict_described
+from stockout.hypothetical import ProductDescription, predict_described
 from stockout.predict import predict, serving_row
 from stockout.train import train
 
@@ -50,7 +50,9 @@ def test_the_adapter_produces_every_canonical_column() -> None:
     sales, stores = source_for(PRODUCTS).load()
 
     assert not set(s.CANONICAL_COLUMNS) - set(sales.columns)
-    assert stores is None
+    # Per-entity metadata, which on a product source is the item catalogue restated one
+    # row per store-item pair so it joins the way store metadata already does.
+    assert stores is not None
 
 
 def test_the_adapter_keeps_both_ids_beside_the_entity() -> None:
@@ -148,22 +150,35 @@ def test_the_prediction_carries_the_products_own_cut_points(artifact) -> None:
 # -- what the source cannot answer ---------------------------------------------
 
 
-def test_no_cold_start_model_is_fitted_without_attributes(artifact) -> None:
+@pytest.fixture(scope="module")
+def uncatalogued(tmp_path_factory):
+    """A product artefact shaped like `store_item_demand`: ids and units, nothing else.
+
+    Built by stripping the catalogue off the committed sample rather than by downloading
+    Kaggle's file, so this runs offline — the shape is what matters, and the shape is
+    "no metadata, no item features".
+    """
+    prepared = prepare(PRODUCTS)
+    prepared.stores = None
+    prepared.feature_columns = [
+        c for c in prepared.feature_columns if c not in features.ITEM_FEATURES
+    ]
+    built, _ = train(prepared, path=tmp_path_factory.mktemp("bare") / "model.joblib")
+    return built
+
+
+def test_no_cold_start_model_is_fitted_without_a_catalogue(uncatalogued) -> None:
     """Fitting one on the calendar alone would answer every described item identically."""
-    assert artifact.cold_regressor is None
-    assert artifact.cold_scores == {}
+    assert uncatalogued.cold_regressor is None
+    assert uncatalogued.cold_scores == {}
 
 
-def test_describing_a_product_explains_itself_rather_than_guessing(artifact) -> None:
-    """The message must not tell a visitor to retrain: no retrain will ever produce it."""
+def test_a_source_with_no_catalogue_explains_itself_rather_than_guessing(
+    uncatalogued,
+) -> None:
+    """The message must not tell a visitor to retrain: no retrain produces one from ids."""
     with pytest.raises(StockoutError, match="describes no attributes"):
-        predict_described(
-            artifact,
-            StoreDescription(
-                store_type="a", assortment="a", competition_distance=500.0, promo2=False
-            ),
-            date=DATE,
-        )
+        predict_described(uncatalogued, ProductDescription(category="snacks"), date=DATE)
 
 
 def test_the_artefact_records_what_its_numbers_count(artifact) -> None:
@@ -290,3 +305,69 @@ def test_the_printed_difference_stays_within_the_scale_of_the_bands(artifact) ->
     widest = max(abs(item.difference_percent) for item in shelf.items)
 
     assert widest < 50.0
+
+
+# -- what an item is -----------------------------------------------------------
+
+
+def test_the_sample_says_what_each_item_is(prepared) -> None:
+    """`synthetic_products` ships a catalogue; the real Kaggle file does not.
+
+    Generating one for a fixture this repository authors is not the same as inventing
+    labels for anonymised data, which this project refuses to do for Rossmann's shop
+    groups. `store_item_demand` keeps its bare integers and declares as much.
+    """
+    assert source_for(PRODUCTS).has_item_metadata
+    assert not source_for("store_item_demand").has_item_metadata
+
+    catalogue = prepared.stores
+    assert catalogue is not None
+    assert set(catalogue.columns) >= {s.ENTITY, s.PRODUCT_NAME, s.CATEGORY}
+
+
+def test_the_category_is_a_feature_where_it_exists(prepared) -> None:
+    assert set(features.ITEM_FEATURES) <= set(prepared.feature_columns)
+    assert not set(features.ITEM_FEATURES) & set(prepare(STORE_DAY).feature_columns)
+
+
+def test_the_category_predicts_how_much_sells(prepared) -> None:
+    """Otherwise it is a column the model cannot use and the described item is guesswork.
+
+    The same correction `data/synth.py` needed for stores: a level drawn independently of
+    the attribute meant to explain it left the attribute worthless.
+    """
+    frame = prepared.frame
+    by_category = frame.groupby(frame[s.CATEGORY])[s.SALES].mean()
+
+    assert by_category.max() > by_category.min() * 2
+
+
+# -- describing an item that is not stocked yet --------------------------------
+
+
+def test_a_cold_start_model_is_fitted_from_the_catalogue(artifact) -> None:
+    """With attributes to describe an item by, the described-item page can answer."""
+    assert artifact.cold_regressor is not None
+    assert s.CATEGORY in artifact.cold_feature_columns
+
+
+def test_the_cold_model_cannot_see_which_item_it_is(artifact) -> None:
+    """Identity in any of its three spellings would let it recognise rather than describe."""
+    for column in (features.ENTITY_CODE, *features.PRODUCT_FEATURES):
+        assert column not in artifact.cold_feature_columns
+
+
+def test_two_categories_get_two_different_answers(artifact) -> None:
+    quiet = predict_described(artifact, ProductDescription(category="beauty"), date=DATE)
+    busy = predict_described(artifact, ProductDescription(category="household"), date=DATE)
+
+    assert busy.sales != quiet.sales
+
+
+def test_the_described_item_reports_what_it_is_worth(artifact) -> None:
+    """Negative, and shown. A category is not an item, and the page says the score."""
+    answer = predict_described(artifact, ProductDescription(category="snacks"), date=DATE)
+
+    assert answer.unseen_store_r2 == pytest.approx(
+        artifact.cold_scores["unseen_store_r2"]
+    )

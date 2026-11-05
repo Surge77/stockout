@@ -47,6 +47,23 @@ def _ranked() -> Ranking:
     return Ranking(store=STORE, date=pd.Timestamp(DATE), items=items, status=None)
 
 
+def _profile(entity: str, item: str, name: str, category: str, typical: float) -> StoreProfile:
+    return StoreProfile(
+        entity=entity, store_type="", assortment="", typical_sales=typical,
+        quiet_cut=typical * 0.8, busy_cut=typical * 1.2, competition_km=None,
+        has_promo2=False, days=730, store=STORE, item=item,
+        product_name=name, category=category, unit="units",
+    )
+
+
+#: One per ranked row, so the table can print what each item is rather than its number.
+_PROFILES = {
+    "3_7": _profile("3_7", "7", "Crisps, sharing bag", "snacks", 55.0),
+    "3_2": _profile("3_2", "2", "Shampoo, 400ml", "personal care", 36.0),
+    "3_5": _profile("3_5", "5", "Lipstick", "beauty", 11.0),
+}
+
+
 class _StubCatalogue:
     def uses_promotions(self) -> bool:
         return False
@@ -107,6 +124,13 @@ class _ProductService:
 
     def item_options(self, store: str) -> list[StoreProfile]:
         return self.store_options()
+
+    def profile_for(self, entity: str) -> StoreProfile | None:
+        """The shelf pairs each row with its catalogue entry, so it can name the item."""
+        return _PROFILES.get(entity)
+
+    def categories(self) -> list[str]:
+        return ["household", "snacks", "beauty"]
 
     def stores(self) -> list[str]:
         return ["1", "2", "3"]
@@ -194,7 +218,11 @@ def test_it_ranks_the_shelf_busiest_first(client: TestClient) -> None:
 
     assert response.status_code == 200
     body = response.text
-    assert body.index(">7<") < body.index(">2<") < body.index(">5<")
+    assert (
+        body.index("Crisps, sharing bag")
+        < body.index("Shampoo, 400ml")
+        < body.index("Lipstick")
+    )
 
 
 def test_it_shows_the_shelf_total(client: TestClient) -> None:
