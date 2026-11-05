@@ -15,7 +15,7 @@ from .config import MODEL_PATH, RANDOM_SEED, TEST_SIZE
 from .data import schemas as s
 from .datasets import Prepared, prepare
 from .evaluate import score, scored_against, split, training_rows
-from .features import ENTITY_CODE
+from .features import ENTITY_CODE, PRODUCT_FEATURES
 from .persistence import Artifact, save
 from .registry import build
 
@@ -31,7 +31,10 @@ _COLD_SAMPLE_STORES = 5
 
 #: Features the cold-start model may not use, and why each one is out.
 #:
-#: `entity_code` is the obvious one: a store nobody has seen has no id.
+#: `entity_code` is the obvious one: a store nobody has seen has no id. `store_code` and
+#: `item_code` are the same thing wearing two hats — on a product source they are the two
+#: halves of that id, and leaving them in would let the model answer a described item by
+#: recognising which item it is.
 #:
 #: The three ages are subtler and were found by measuring. They are per-store constants
 #: plus a time trend — `competition_open_age_months` alone carries 16% of the deployed
@@ -45,6 +48,7 @@ _COLD_SAMPLE_STORES = 5
 #: exist yet: the calendar, the day's promotions, and the store's own attributes.
 _COLD_EXCLUDED: tuple[str, ...] = (
     ENTITY_CODE,
+    *PRODUCT_FEATURES,
     "competition_open_age_months",
     "promo2_age_weeks",
     "is_promo2_month",
@@ -121,13 +125,19 @@ def train(
 def _fit_cold_start(regression, regressor: str, seed: int):
     """Fit the regressor again without `entity_code`, and score it on a store it never saw.
 
-    Returns nothing at all for a source with no per-entity metadata. The model exists to
-    answer *how much would a shop like this take*, and "like this" is spelled out in store
-    type, assortment and competitor distance. A product source publishes none of those —
-    Kaggle never said what any item is — so the only features left would be the calendar,
-    every described shop would arrive as the same row, and the page would return one
-    confident number for every question anybody could ask it. An absent model the surface
-    can explain beats a fitted one that cannot tell two questions apart.
+    Returns nothing at all for a source that describes its entities not at all. The model
+    answers *how much would one like this take*, and "like this" has to be spelled out in
+    something: store type, assortment and competitor distance for a shop, category for an
+    item. `store_item_demand` publishes none of either — Kaggle never said what any item is
+    — so the only features left would be the calendar, every description would arrive as
+    the same row, and the page would return one confident number for every question anybody
+    could ask it. An absent model the surface can explain beats a fitted one that cannot
+    tell two questions apart.
+
+    Measured on `synthetic_products`, holding out each of one shop's twenty items in turn:
+    the calendar alone scores a median r² of -3.85, and adding the category -0.37. Still
+    negative — a category is not an item — but a different order of wrong, and better on
+    fifteen of the twenty.
 
     Two different questions hide behind "predict this store's sales". *How much will
     store 12 take on Monday* may use everything known about store 12, identity included.
