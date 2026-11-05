@@ -74,6 +74,16 @@ class Catalogue:
         ]
         return sorted(profiles, key=lambda profile: profile.typical_sales, reverse=True)
 
+    def categories(self) -> list[str]:
+        """The kinds of thing this deployment stocks, in the order they were catalogued.
+
+        Read off the fitted profiles rather than the vocabulary: the vocabulary is every
+        category the encoder can represent, and this is the set the deployed model has
+        actually seen rows of.
+        """
+        seen = {p.category for p in self.profiles.values() if p.category}
+        return sorted(seen)
+
     def entity_for(self, store: str, item: str | None) -> str:
         """The series id from the two halves a product form submits."""
         if not self.has_products:

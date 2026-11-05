@@ -115,6 +115,9 @@ class ModelService:
     def entity_for(self, store: str, item: str | None) -> str:
         return self.catalogue.entity_for(store, item)
 
+    def categories(self) -> list[str]:
+        return self.catalogue.categories()
+
     def entity_label(self) -> str:
         return self.artifact.entity_label
 

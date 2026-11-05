@@ -68,6 +68,12 @@ class StoreProfile:
     store: str = ""
     item: str = ""
 
+    #: What the item is, where the source publishes a catalogue. Empty on
+    #: `store_item_demand`, which gives an integer per item and nothing else — so a page
+    #: that wants to name an item has to cope with there being no name, and does.
+    product_name: str = ""
+    category: str = ""
+
     #: What `typical_sales` counts, so the wording can say "units" where that is the truth
     #: and stay silent where the figure is a till total in an unstated currency.
     unit: str = "currency"
@@ -75,6 +81,21 @@ class StoreProfile:
     @property
     def is_product(self) -> bool:
         return bool(self.item)
+
+    @property
+    def title(self) -> str:
+        """What to call this entity on screen.
+
+        The catalogue's name where there is one, the bare id where there is not. Both are
+        real states: this repository generates `synthetic_products` and can therefore say
+        what item 7 is, while Kaggle's file publishes the integer alone and inventing a
+        name for it would be the fabrication this project refuses elsewhere.
+        """
+        if self.product_name:
+            return self.product_name
+        if self.is_product:
+            return f"Item {self.item}"
+        return f"Shop {self.entity}"
 
     @property
     def amount_text(self) -> str:
@@ -103,7 +124,8 @@ class StoreProfile:
         the figure every prediction below is relative to.
         """
         if self.is_product:
-            return f"Item {self.item} — about {self.amount_text} on a normal day here"
+            kind = f" ({self.category})" if self.category else ""
+            return f"{self.title}{kind} — about {self.amount_text} on a normal day here"
         return (
             f"Shop {self.entity} — {self.type_label}, {self.assortment_label}, "
             f"takes about {self.typical_sales:,.0f} on a normal day"
@@ -153,6 +175,8 @@ def build_profiles(
             days=len(group),
             store=store,
             item=item,
+            product_name=str(facts.get(s.PRODUCT_NAME, "") or ""),
+            category=str(facts.get(s.CATEGORY, "") or ""),
             unit=unit,
         )
     return profiles
