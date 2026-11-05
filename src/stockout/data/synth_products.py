@@ -41,10 +41,53 @@ DEFAULT_STORES = 10
 DEFAULT_ITEMS = 20
 DEFAULT_DAYS = 730
 
-#: Quietest and busiest item, in units on an average day. Log-spaced between the two, so
-#: the catalogue has a few sellers and a long tail rather than twenty near-identical items.
-_QUIETEST_ITEM = 4.0
-_BUSIEST_ITEM = 55.0
+#: The catalogue: what each item *is*, and how briskly its kind of thing sells.
+#:
+#: The real Store Item Demand file publishes an integer and nothing else — no name, no
+#: category, no price — so this is the one place the two sources deliberately differ. That
+#: is not an invented label for anonymised data, which this project refuses to do elsewhere
+#: (Rossmann's shop groups stay letters); it is a fixture being authored. `store_item_demand`
+#: keeps its bare integers and declares `has_item_metadata=False`.
+#:
+#: The category carries a **base rate**, so what an item is genuinely predicts how much of
+#: it sells — the same correction `data/synth.py` needed when a store's level was drawn
+#: independently of its attributes and nothing tied the two together. Without it `category`
+#: would be a column the model could not use and the described-item page could not answer.
+PRODUCT_CATALOGUE: tuple[tuple[str, str, float], ...] = (
+    # (name, category, average units a day in a mid-sized shop)
+    ("Kitchen towel, 4 pack", "household", 52.0),
+    ("Washing-up liquid, 500ml", "household", 34.0),
+    ("Bin bags, 20 pack", "household", 28.0),
+    ("Surface spray, 750ml", "household", 19.0),
+    ("Still water, 6x1.5L", "drinks", 47.0),
+    ("Cola, 8x330ml", "drinks", 41.0),
+    ("Orange juice, 1L", "drinks", 26.0),
+    ("Instant coffee, 200g", "drinks", 17.0),
+    ("Crisps, sharing bag", "snacks", 44.0),
+    ("Milk chocolate, 100g", "snacks", 31.0),
+    ("Mixed nuts, 200g", "snacks", 14.0),
+    ("Shampoo, 400ml", "personal care", 23.0),
+    ("Toothpaste, 100ml", "personal care", 21.0),
+    ("Shower gel, 250ml", "personal care", 18.0),
+    ("Hand soap, 300ml", "personal care", 12.0),
+    ("Nappies, size 4", "baby", 11.0),
+    ("Baby wipes, 3 pack", "baby", 9.0),
+    ("Infant formula, 800g", "baby", 5.0),
+    ("Moisturiser, 50ml", "beauty", 7.0),
+    ("Lipstick", "beauty", 4.0),
+)
+
+#: The closed set of categories, in the order they appear above. Fixed rather than derived,
+#: because `features` label-encodes it against a vocabulary that must not depend on which
+#: rows a fold happened to contain.
+PRODUCT_CATEGORIES: tuple[str, ...] = (
+    "household", "drinks", "snacks", "personal care", "baby", "beauty",
+)
+
+#: How much an item's own level may stray from its category's base rate. Kept modest: the
+#: category has to be worth something to a model, and an item-level multiplier wide enough
+#: to swamp it would make `category` noise wearing a label.
+_ITEM_SPREAD = 0.35
 
 #: Smallest and largest shop, as a multiplier on any item's level. Deliberately a narrower
 #: span than the item range: which item it is should matter more than which shop it is in,
@@ -88,13 +131,16 @@ def make_product_sales(
     rng = np.random.default_rng(seed)
     dates = pd.date_range(start, periods=days, freq="D")
 
-    item_base = np.geomspace(_QUIETEST_ITEM, _BUSIEST_ITEM, n_items)
-    store_multiplier = np.linspace(_SMALLEST_STORE, _LARGEST_STORE, n_stores)
+    catalogue = _catalogue_for(n_items)
+    # Each item's level is its category's base rate, nudged. So `category` predicts demand
+    # and an item still has an identity of its own worth knowing.
+    item_base = np.asarray([rate for _, _, rate in catalogue], dtype="float64")
+    item_base *= rng.uniform(1.0 - _ITEM_SPREAD, 1.0 + _ITEM_SPREAD, size=len(catalogue))
 
-    # Shuffled so that neither id is its own ranking. Left in order, `item_code` would be
-    # a monotone stand-in for the item's level and a single split on it would recover most
-    # of the signal — which would flatter the feature this sample exists to demonstrate.
-    rng.shuffle(item_base)
+    store_multiplier = np.linspace(_SMALLEST_STORE, _LARGEST_STORE, n_stores)
+    # Shuffled so a store's id is not its own ranking. Left in order, `store_code` would be
+    # a monotone stand-in for the shop's size and one split would recover most of the
+    # signal — which would flatter the feature this sample exists to demonstrate.
     rng.shuffle(store_multiplier)
 
     calendar = _calendar_factor(dates)
@@ -142,3 +188,30 @@ def _calendar_factor(dates: pd.DatetimeIndex) -> np.ndarray:
         2.0 * np.pi * (day_of_year - _SEASON_PEAK_DAY) / _DAYS_PER_YEAR
     )
     return weekday * season
+
+
+def _catalogue_for(n_items: int) -> list[tuple[str, str, float]]:
+    """The first `n_items` catalogue entries, cycling if more are asked for than exist.
+
+    Cycling rather than raising so the generator stays resizable from the command line;
+    a second copy of an item is a different item id with the same description, which is
+    what a real catalogue does with two pack sizes anyway.
+    """
+    catalogue = list(PRODUCT_CATALOGUE)
+    while len(catalogue) < n_items:
+        catalogue += list(PRODUCT_CATALOGUE)
+    return catalogue[:n_items]
+
+
+def make_catalogue(n_items: int = DEFAULT_ITEMS) -> pd.DataFrame:
+    """One row per item: what it is, and which kind of thing it is.
+
+    Written beside the sales file the way `sample_stores.csv` sits beside `sample_sales.csv`
+    — the metadata a source publishes about its entities, kept out of the fact table rather
+    than repeated across every one of its rows.
+    """
+    rows = [
+        {s.ITEM: index, s.PRODUCT_NAME: name, s.CATEGORY: category}
+        for index, (name, category, _) in enumerate(_catalogue_for(n_items), start=1)
+    ]
+    return pd.DataFrame(rows)

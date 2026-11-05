@@ -20,6 +20,11 @@ SAMPLE_STORES_PATH = DATA_DIR / "sample_stores.csv"
 #: has no per-entity metadata to join — see `data/synth_products.py`.
 SAMPLE_PRODUCTS_PATH = DATA_DIR / "sample_product_sales.csv"
 
+#: What each item in that sample is. Two files rather than one for the same reason the
+#: store-day sample is two: the catalogue is per item, and flattening the join would repeat
+#: every description across all 7,300 of that item's rows.
+SAMPLE_CATALOGUE_PATH = DATA_DIR / "sample_product_catalogue.csv"
+
 #: Downloaded sources land here. Never committed: both Rossmann and Store Item Demand
 #: forbid redistribution, which is why the two synthetic samples exist at all.
 RAW_DIR = DATA_DIR / "raw"

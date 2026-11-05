@@ -19,6 +19,12 @@ STORE: Final = "store"
 #: the separator cannot occur inside either half.
 PRODUCT_ENTITY_SEPARATOR: Final = "_"
 
+#: What an item *is*, on the one source that says. The real Store Item Demand file
+#: publishes an integer and nothing else, so these exist for `synthetic_products` and
+#: `Source.has_item_metadata` is what declares which sources carry them.
+PRODUCT_NAME: Final = "product_name"
+CATEGORY: Final = "category"
+
 #: The product axis, on sources that have one. Absent from every store-day source, which
 #: is why `features.PRODUCT_FEATURES` is built conditionally rather than always.
 ITEM: Final = "item"
