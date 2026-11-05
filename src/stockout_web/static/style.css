@@ -353,9 +353,10 @@ table.shelf tr:last-child td { border-bottom: none; }
 table.shelf tbody tr:hover { background: var(--page); }
 
 /* The item id is the only name an item has — the source publishes no other. */
-.item-id {
-  font-variant-numeric: tabular-nums; font-weight: 600;
-  color: var(--muted); width: 4rem;
+.item-name { width: 16rem; font-weight: 600; }
+.item-name small {
+  display: block; font-weight: 400; font-size: .78rem; color: var(--muted);
+  text-transform: capitalize;
 }
 
 /* Width is a share of the busiest item, not of the shelf total: against the total

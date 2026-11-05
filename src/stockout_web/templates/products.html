@@ -124,9 +124,12 @@
       </tr>
     </thead>
     <tbody>
-      {% for row in rows %}
+      {% for row, profile in rows %}
       <tr>
-        <td class="item-id">{{ row.item }}</td>
+        <td class="item-name">
+          {{ profile.title if profile else 'Item ' ~ row.item }}
+          {% if profile and profile.category %}<small>{{ profile.category }}</small>{% endif %}
+        </td>
         <td class="num">{{ '{:,.0f}'.format(row.sales) }}</td>
         <td class="bar-cell">
           {# Width against the busiest item, so the column reads as a shape rather than as

@@ -27,12 +27,21 @@
   </p>
 </section>
 {% else %}
+{% if has_products %}
+<h1>What would an item like this shift?</h1>
+<p class="lede">
+  No item id. Say what <em>kind</em> of thing it is and get an estimate for one day — what
+  a shop would expect from a line it has never stocked, before there is any history to
+  learn from.
+</p>
+{% else %}
 <h1>What would a shop like this take?</h1>
 <p class="lede">
   No store id. Describe a shop by its attributes and get a sales estimate for one day —
   the same way a house-price model works from bedrooms, floor area and location rather
   than from a house's address.
 </p>
+{% endif %}
 
 <details class="explainer">
   <summary>Why this is a different model from the forecast page</summary>
@@ -67,6 +76,40 @@
 </details>
 
 <form method="post" action="/what-if" class="card">
+  {% if has_products %}
+  {# One field, because a catalogue publishes one thing. Offering price or pack size would
+     collect input the model cannot read — the failure this page warns about for Rossmann's
+     shop groups, made concrete. #}
+  <div class="field">
+    <label for="category">Kind of item</label>
+    <select id="category" name="category" required>
+      {% for name in categories %}
+      <option value="{{ name }}" {% if name == category %}selected{% endif %}>{{ name|capitalize }}</option>
+      {% endfor %}
+    </select>
+    <small>
+      All the catalogue records about an item. No price, no pack size, no brand — so this
+      is the whole of what can be said about a line that does not exist yet, and the
+      estimate is what that kind of thing does in an average shop.
+    </small>
+  </div>
+
+  <div class="field">
+    <label for="product_date">Date</label>
+    <input type="date" id="product_date" name="date" required
+           value="{{ date or observed_through }}" min="{{ date_min }}">
+    <small>
+      A described item has no actual to check against in either region — it is not
+      stocked — so a date past <code>{{ observed_through }}</code> is answered on the same
+      terms as one inside the data.
+    </small>
+  </div>
+
+  <p class="note">
+    <strong>{{ dataset }}</strong> records no promotions or holidays, so there is nothing
+    else here to set.
+  </p>
+  {% else %}
   <div class="field-row">
     <div class="field">
       <label for="store_type">Store type</label>
@@ -101,7 +144,7 @@
       </small>
     </div>
 
-    <div class="field">
+    <div class="field" id="date-field">
       <label for="date">Date</label>
       <input type="date" id="date" name="date" required
              value="{{ date or observed_through }}" min="{{ date_min }}">
@@ -132,6 +175,7 @@
       <label class="check"><input type="checkbox" name="school_holiday" value="true" {% if school_holiday %}checked{% endif %}> School holiday</label>
     </div>
   </div>
+  {% endif %}
 
   <button type="submit">Estimate</button>
 </form>
