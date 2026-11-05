@@ -14,7 +14,9 @@ offer one that cannot be answered.
 from __future__ import annotations
 
 from stockout.hypothetical import (
+    Description,
     HypotheticalPrediction,
+    ProductDescription,
     StoreDescription,
     contributions,
     predict_described,
@@ -25,21 +27,31 @@ from stockout.persistence import Artifact
 def describe(
     artifact: Artifact,
     *,
-    store_type: str,
-    assortment: str,
-    competition_distance: float | None,
-    promo2: bool,
+    store_type: str = "",
+    assortment: str = "",
+    competition_distance: float | None = None,
+    promo2: bool = False,
+    category: str = "",
     date: str,
-    promo: bool,
+    promo: bool = False,
     state_holiday: str = "0",
     school_holiday: bool = False,
 ) -> tuple[HypotheticalPrediction, list[tuple[str, float]]]:
-    """The answer for a described shop, and what each attribute was worth to it."""
-    description = StoreDescription(
-        store_type=store_type,
-        assortment=assortment,
-        competition_distance=competition_distance,
-        promo2=promo2,
+    """The answer for a described entity, and what each attribute was worth to it.
+
+    Which fields matter depends on what the deployed source describes. A shop is its type,
+    range, competitor distance and continuing promotion; an item is its category, because
+    a catalogue publishes nothing else. The form only renders the ones that apply.
+    """
+    description: Description = (
+        ProductDescription(category=category)
+        if artifact.has_products
+        else StoreDescription(
+            store_type=store_type,
+            assortment=assortment,
+            competition_distance=competition_distance,
+            promo2=promo2,
+        )
     )
     shared = {
         "date": date,

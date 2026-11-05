@@ -92,8 +92,9 @@ async def shelf(
         }
     )
 
+    service = _service(request)
     try:
-        ranked = _service(request).rank_products(
+        ranked = service.rank_products(
             store=store,
             date=date,
             promo=promo,
@@ -107,7 +108,13 @@ async def shelf(
     context.update(
         {
             "ranked": ranked,
-            "rows": ranked.busiest(DEFAULT_SHOWN),
+            # Paired with the catalogue so the table can say what each row *is*. The
+            # profile also carries the fallback for a source with no catalogue, where the
+            # only true label is the item's number.
+            "rows": [
+                (item, service.profile_for(item.entity))
+                for item in ranked.busiest(DEFAULT_SHOWN)
+            ],
             "hidden": max(0, len(ranked) - DEFAULT_SHOWN),
             "total": f"{ranked.total:,.0f}",
             "caveat": ranked.status.caveat() if ranked.status else None,

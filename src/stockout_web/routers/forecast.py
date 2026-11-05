@@ -217,6 +217,11 @@ def _whatif_context(request: Request) -> dict[str, object]:
         "observed_through": end,
         "unseen_r2": service.artifact.cold_scores.get("unseen_store_r2"),
         "cold_features": service.artifact.cold_feature_columns,
+        # Which form to render. A described item is its category and nothing else; a
+        # described shop has four attributes. Both come from what the source publishes.
+        "has_products": service.has_products(),
+        "unit": service.unit(),
+        "categories": service.categories(),
     }
 
 
@@ -230,8 +235,9 @@ async def whatif_form(request: Request, user: CurrentUser) -> HTMLResponse:
 async def whatif(
     request: Request,
     user: CurrentUser,
-    store_type: Annotated[str, Form()],
-    assortment: Annotated[str, Form()],
+    store_type: Annotated[str, Form()] = "",
+    assortment: Annotated[str, Form()] = "",
+    category: Annotated[str, Form()] = "",
     competition_distance: Annotated[str, Form()] = "",
     promo2: Annotated[bool, Form()] = False,
     date: Annotated[str, Form()] = "",
@@ -242,7 +248,7 @@ async def whatif(
     """Answer for a described shop, with what each attribute was worth."""
     context = _whatif_context(request)
     context.update({
-        "store_type": store_type, "assortment": assortment,
+        "store_type": store_type, "assortment": assortment, "category": category,
         "competition_distance": competition_distance, "promo2": promo2,
         "date": date, "promo": promo,
         "state_holiday": state_holiday, "school_holiday": school_holiday,
@@ -253,6 +259,7 @@ async def whatif(
             _service(request).artifact,
             store_type=store_type,
             assortment=assortment,
+            category=category,
             competition_distance=_metres(competition_distance),
             promo2=promo2,
             date=date,
